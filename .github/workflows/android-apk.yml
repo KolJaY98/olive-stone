@@ -21,67 +21,9 @@ jobs:
           rm -rf project
           mkdir project
           unzip -q olive_stone_project.zip -d project
+          sed -i "s/^version\/code=.*/version\/code=${{ github.run_number }}/" project/export_presets.cfg
+          grep -E "^version/" project/export_presets.cfg
           ls -la project
-
-      - name: Patch project (export preset, ETC2 setting, icon, camera fix)
-        run: |
-          cat > project/export_presets.cfg <<'EOF'
-          [preset.0]
-
-          name="Android"
-          platform="Android"
-          runnable=true
-          dedicated_server=false
-          custom_features=""
-          export_filter="all_resources"
-          include_filter=""
-          exclude_filter=""
-          export_path=""
-          encryption_include_filters=""
-          encryption_exclude_filters=""
-          encrypt_pck=false
-          encrypt_directory=false
-
-          [preset.0.options]
-
-          custom_template/debug=""
-          custom_template/release=""
-          gradle_build/use_gradle_build=false
-          gradle_build/export_format=0
-          architectures/armeabi-v7a=false
-          architectures/arm64-v8a=true
-          architectures/x86=false
-          architectures/x86_64=false
-          version/code=1
-          version/name="0.1.0"
-          package/unique_name="org.oliveandstone.palestine"
-          package/name="Olive and Stone"
-          package/signed=true
-          screen/immersive_mode=true
-          user_data_backup/allow=false
-          EOF
-          python3 - <<'PY'
-          p = "project/scripts/main.gd"
-          s = open(p).read()
-          old = "\tcamera.position = Vector3(1800, 2200, 2100)\n\tcamera.look_at(camera_target, Vector3.UP)\n\tadd_child(camera)\n"
-          new = "\tadd_child(camera)\n\tcamera.position = Vector3(1800, 2200, 2100)\n\tcamera.look_at(camera_target, Vector3.UP)\n"
-          if old in s:
-              open(p, "w").write(s.replace(old, new))
-              print("camera fix applied")
-          else:
-              print("camera fix already present or pattern not found")
-          PY
-          python3 - <<'PY'
-          p = "project/project.godot"
-          s = open(p).read()
-          if "import_etc2_astc" not in s:
-              s = s.replace("[rendering]\n", "[rendering]\n\ntextures/vram_compression/import_etc2_astc=true\n", 1)
-          if "config/icon" not in s:
-              s = s.replace("[application]\n", "[application]\n\nconfig/icon=\"res://icon.svg\"\n", 1)
-          open(p, "w").write(s)
-          open("project/icon.svg", "w").write('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" rx="20" fill="#6b7a3a"/><circle cx="64" cy="64" r="34" fill="#d8cfa8"/></svg>')
-          print("project.godot patched")
-          PY
 
       - name: Install Android SDK packages
         run: |
@@ -100,14 +42,24 @@ jobs:
           mkdir -p "$HOME/.local/share/godot/export_templates/4.3.stable"
           unzip -q templates.tpz -d tpl
           mv tpl/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
-          ls "$HOME/.local/share/godot/export_templates/4.3.stable/" | head -50
 
-      - name: Create debug keystore and Godot editor settings
+      - name: Restore debug keystore (keeps the same signature between builds)
+        id: ks
+        uses: actions/cache@v4
+        with:
+          path: ~/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Create debug keystore (first run only)
+        if: steps.ks.outputs.cache-hit != 'true'
         run: |
           keytool -genkeypair -v -keystore "$HOME/debug.keystore" \
             -storepass android -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Write Godot editor settings
+        run: |
           mkdir -p "$HOME/.config/godot"
           cat > "$HOME/.config/godot/editor_settings-4.tres" <<SETTINGS
           [gd_resource type="EditorSettings" format=3]
