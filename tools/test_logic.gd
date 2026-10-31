@@ -31,7 +31,7 @@ func _init() -> void:
 	print("after 6 days: day=", scene.day, " res=", scene.resources, " xp=", snappedf(scene.xp, 0.1), " level=", scene.level, " pop=", scene.survivors.size())
 	print("last_income=", scene.last_income)
 	# no passive growth
-	for r in ["Food", "Water", "Wood", "Stone", "Scrap"]:
+	for r in scene.jobs:
 		scene.jobs[r] = 0
 	scene._assign_tasks()
 	for i in range(240):
@@ -40,7 +40,7 @@ func _init() -> void:
 	for i in range(240):
 		scene._process(0.1)
 	print("no jobs -> wood unchanged: ", w0 == scene.resources["Wood"])
-	scene.jobs = {"Food": 1, "Water": 1, "Wood": 1, "Stone": 1, "Scrap": 0}
+	scene.jobs = {"Food": 1, "Water": 1, "Wood": 1, "Stone": 1, "Scrap": 0, "Oil": 0}
 	scene._assign_tasks()
 	# locked building and plot rules
 	scene._card_pressed("Farm")
@@ -106,7 +106,7 @@ func _init() -> void:
 	# game over
 	scene.resources["Food"] = 0.0
 	scene.resources["Water"] = 0.0
-	for r in ["Food", "Water", "Wood", "Stone", "Scrap"]:
+	for r in scene.jobs:
 		scene.jobs[r] = 0
 	scene._assign_tasks()
 	var guard := 0

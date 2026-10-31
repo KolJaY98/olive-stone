@@ -6,7 +6,7 @@ extends Node3D
 # to resource points, gather, and carry loads back. Experience unlocks buildings and
 # building plots. Arabic, right-to-left interface.
 
-const VERSION := "0.4.0"
+const VERSION := "0.5.0"
 const GRID := 48
 const TILE_SIZE := 75.0
 const START_POP := 5
@@ -31,14 +31,63 @@ const TRAIL_MAX := 900
 const MAX_LEVEL := 5
 const LEVEL_XP := [0.0, 60.0, 180.0, 400.0, 750.0]
 
-const RES_NAMES := ["Food", "Water", "Wood", "Stone", "Scrap"]
-const RES_AR := {"Food": "طعام", "Water": "ماء", "Wood": "خشب", "Stone": "حجر", "Scrap": "خردة"}
+const RES_NAMES := ["Food", "Water", "Wood", "Stone", "Scrap", "Oil", "Dinar"]
+const RES_AR := {
+	"Food": "طعام", "Water": "ماء", "Wood": "خشب",
+	"Stone": "حجر", "Scrap": "خردة", "Oil": "زيت", "Dinar": "دينار"
+}
 const RES_COLORS := {
 	"Food": Color("#e0ac4a"), "Water": Color("#56b0e0"), "Wood": Color("#b07a45"),
-	"Stone": Color("#d8d0bb"), "Scrap": Color("#d0844f")
+	"Stone": Color("#d8d0bb"), "Scrap": Color("#d0844f"),
+	"Oil": Color("#c8b84a"), "Dinar": Color("#f5d060")
 }
-const START_RESOURCES := {"Food": 50.0, "Water": 60.0, "Wood": 60.0, "Stone": 40.0, "Scrap": 20.0}
+# Dinar doesn't count against workers; Oil produced by Olive Press
+const RES_TOP_BAR := ["Food", "Water", "Wood", "Stone", "Scrap", "Oil", "Dinar"]
+const START_RESOURCES := {"Food": 50.0, "Water": 60.0, "Wood": 60.0, "Stone": 40.0, "Scrap": 20.0, "Oil": 0.0, "Dinar": 10.0}
 const START_JOBS := {"Food": 2, "Water": 2, "Wood": 1, "Stone": 0, "Scrap": 0}
+# Caravan trades: list of {day_from, res_buy, cost_dinar, res_sell, earn_dinar}
+const CARAVAN_INTERVAL := 10
+const CARAVAN_FIRST_DAY := 15
+# Tax levels {name, rate, discontent_per_day}
+const TAX_LEVELS := [
+	{"ar": "بلا ضريبة", "dinar": 0.0, "discontent": 0.0},
+	{"ar": "خفيفة 5%", "dinar": 3.0, "discontent": 0.0},
+	{"ar": "معتدلة 15%", "dinar": 8.0, "discontent": 1.0},
+	{"ar": "ثقيلة 30%", "dinar": 15.0, "discontent": 3.0}
+]
+# Moral events pool
+const MORAL_EVENTS := [
+	{
+		"text": "وصلت عائلة لاجئة تطلب الانضمام. الموارد شحيحة لكن قلوب ناجيك تطلب المساعدة.",
+		"a": "استقبلهم (+2 سكان، طعام −20)", "b": "اعتذر برفق (لا تغيير)",
+		"effect_a": "refugee_accept", "effect_b": "none"
+	},
+	{
+		"text": "اكتشف أحد الناجين كنزًا من الدنانير في أنقاض منزل قديم.",
+		"a": "وزّعه على الجميع (معنوية +10)", "b": "ضعه في الخزينة (+25 دينار)",
+		"effect_a": "morale_boost", "effect_b": "dinar_bonus"
+	},
+	{
+		"text": "طلب تاجر مرور شراء فائض الطعام.",
+		"a": "بيعه (طعام −30، دينار +20)", "b": "احتفظ بالطعام للشتاء",
+		"effect_a": "sell_food", "effect_b": "none"
+	},
+	{
+		"text": "وباء بسيط أصاب بعض الناجين. الطبيب يحتاج خردة لصنع دواء.",
+		"a": "علّجهم (خردة −15، صحة +20)", "b": "اعتمد على الراحة (صحة −10)",
+		"effect_a": "treat_illness", "effect_b": "rest_illness"
+	},
+	{
+		"text": "شاب يريد تعلم الحرفة لكنه يحتاج أدوات من الورشة.",
+		"a": "علّمه (خردة −10، XP +30)", "b": "وجّهه للعمل الميداني",
+		"effect_a": "train_craftsman", "effect_b": "none"
+	},
+	{
+		"text": "اقترح ناجٍ حفر خندق دفاعي حول المخيم.",
+		"a": "ابدأ الحفر (حجر −20، أمان +)", "b": "ليست أولوية الآن",
+		"effect_a": "build_trench", "effect_b": "none"
+	},
+]
 const TEXT_SIZES := [0.9, 1.0, 1.12]
 const TEXT_SIZE_AR := ["صغير", "متوسط", "كبير"]
 const NAMES := [
@@ -65,14 +114,26 @@ const SOURCE_DEFS := {
 # Plot classes (footprints in world units) and the fixed plots of the terrace.
 const PLOT_SIZES := {"S": Vector2(76, 76), "M": Vector2(124, 100), "L": Vector2(156, 116)}
 const PLOT_AR := {"S": "صغيرة", "M": "متوسطة", "L": "كبيرة"}
+# All plots unlocked from level 1 — building costs gate progression, not plot locks.
+# zone: "home"=inner residential, "service"=mid ring, "production"=outer ring
 const PLOTS := [
-	{"x": -135.0, "z": 45.0, "cls": "S", "lv": 1}, {"x": 135.0, "z": 45.0, "cls": "S", "lv": 1},
-	{"x": -135.0, "z": 135.0, "cls": "S", "lv": 2}, {"x": 135.0, "z": 135.0, "cls": "S", "lv": 2},
-	{"x": -255.0, "z": -40.0, "cls": "M", "lv": 2}, {"x": 255.0, "z": -40.0, "cls": "M", "lv": 3},
-	{"x": 0.0, "z": 175.0, "cls": "M", "lv": 3},
-	{"x": -200.0, "z": -200.0, "cls": "L", "lv": 2}, {"x": 200.0, "z": -200.0, "cls": "L", "lv": 3},
-	{"x": 0.0, "z": -235.0, "cls": "L", "lv": 4}
+	{"x": -135.0, "z": 45.0, "cls": "S", "lv": 1, "zone": "home"},
+	{"x": 135.0, "z": 45.0, "cls": "S", "lv": 1, "zone": "home"},
+	{"x": -135.0, "z": 135.0, "cls": "S", "lv": 1, "zone": "home"},
+	{"x": 135.0, "z": 135.0, "cls": "S", "lv": 1, "zone": "home"},
+	{"x": -255.0, "z": -40.0, "cls": "M", "lv": 1, "zone": "service"},
+	{"x": 255.0, "z": -40.0, "cls": "M", "lv": 1, "zone": "service"},
+	{"x": 0.0, "z": 175.0, "cls": "M", "lv": 1, "zone": "service"},
+	{"x": -200.0, "z": -200.0, "cls": "L", "lv": 1, "zone": "production"},
+	{"x": 200.0, "z": -200.0, "cls": "L", "lv": 1, "zone": "production"},
+	{"x": 0.0, "z": -235.0, "cls": "L", "lv": 1, "zone": "production"}
 ]
+const ZONE_COLORS := {
+	"home": Color("#6a9a5a", 0.35),
+	"service": Color("#4a8aaa", 0.35),
+	"production": Color("#aa8a4a", 0.35)
+}
+const ZONE_AR := {"home": "سكن", "service": "خدمة", "production": "إنتاج"}
 
 const BUILDINGS := {
 	"Tent": {
@@ -87,38 +148,62 @@ const BUILDINGS := {
 		"desc": "ماء قريب لا ينضب (3 سقّائين)."
 	},
 	"Storehouse": {
-		"ar": "مخزن", "cls": "M", "lv": 2, "tab": "serv", "cost": {"Wood": 22.0, "Stone": 8.0},
+		"ar": "مخزن", "cls": "M", "lv": 1, "tab": "serv", "cost": {"Wood": 22.0, "Stone": 8.0},
 		"time": 10.0, "housing": 0, "gather": {}, "storage": true, "xp": 30.0, "scale": 1.75,
 		"desc": "نقطة تسليم تقصّر رحلات الجمع."
 	},
 	"Farm": {
-		"ar": "مزرعة", "cls": "L", "lv": 2, "tab": "res", "cost": {"Wood": 14.0, "Stone": 6.0},
+		"ar": "مزرعة", "cls": "L", "lv": 1, "tab": "res", "cost": {"Wood": 14.0, "Stone": 6.0},
 		"time": 12.0, "housing": 0, "storage": false, "xp": 30.0, "scale": 2.05,
 		"gather": {"res": "Food", "yield": 8.0, "time": 5.0, "slots": 2},
 		"desc": "طعام لا ينضب بمحصول كبير (مزارعان)."
 	},
 	"Olive Grove": {
-		"ar": "بستان زيتون", "cls": "L", "lv": 3, "tab": "res", "cost": {"Wood": 16.0, "Stone": 5.0},
+		"ar": "بستان زيتون", "cls": "L", "lv": 2, "tab": "res", "cost": {"Wood": 16.0, "Stone": 5.0},
 		"time": 12.0, "housing": 0, "storage": false, "xp": 35.0, "scale": 2.1,
 		"gather": {"res": "Food", "yield": 6.0, "time": 4.0, "slots": 3},
 		"desc": "طعام لا ينضب بقطاف سريع (3 قطّافين)."
 	},
 	"Stone House": {
-		"ar": "بيت حجري", "cls": "M", "lv": 3, "tab": "home", "cost": {"Wood": 20.0, "Stone": 22.0},
+		"ar": "بيت حجري", "cls": "M", "lv": 2, "tab": "home", "cost": {"Wood": 20.0, "Stone": 22.0},
 		"time": 16.0, "housing": 6, "gather": {}, "storage": false, "xp": 45.0, "scale": 1.9,
 		"desc": "بيت من حجر القدس يتسع لـ6 ناجين."
 	},
+	"Pen": {
+		"ar": "حظيرة", "cls": "S", "lv": 2, "tab": "res", "cost": {"Wood": 18.0, "Stone": 4.0},
+		"time": 10.0, "housing": 0, "storage": false, "xp": 28.0, "scale": 1.3,
+		"gather": {"res": "Food", "yield": 3.0, "time": 6.0, "slots": 1},
+		"desc": "ماعز ودجاج — بيض ولحم يومي (راعٍ واحد)."
+	},
+	"Kitchen": {
+		"ar": "مطبخ", "cls": "M", "lv": 2, "tab": "serv", "cost": {"Wood": 16.0, "Stone": 12.0, "Scrap": 5.0},
+		"time": 12.0, "housing": 0, "storage": false, "xp": 35.0, "scale": 1.7,
+		"gather": {}, "kitchen": true,
+		"desc": "يحوّل الطعام الخام إلى وجبات — يقلل الاستهلاك اليومي 25%."
+	},
+	"Olive Press": {
+		"ar": "معصرة زيتون", "cls": "M", "lv": 3, "tab": "res", "cost": {"Wood": 20.0, "Stone": 16.0},
+		"time": 14.0, "housing": 0, "storage": false, "xp": 40.0, "scale": 1.8,
+		"gather": {"res": "Oil", "yield": 3.0, "time": 6.0, "slots": 2},
+		"desc": "يعصر زيت الزيتون (2 عمال). الزيت يُباع للقوافل أو يُطبخ."
+	},
 	"Quarry": {
-		"ar": "مقلع", "cls": "L", "lv": 4, "tab": "res", "cost": {"Wood": 22.0, "Scrap": 6.0},
+		"ar": "مقلع", "cls": "L", "lv": 3, "tab": "res", "cost": {"Wood": 22.0, "Scrap": 6.0},
 		"time": 16.0, "housing": 0, "storage": false, "xp": 50.0, "scale": 2.05,
 		"gather": {"res": "Stone", "yield": 6.0, "time": 5.0, "slots": 3},
 		"desc": "حجر لا ينضب (3 قلّاعين)."
 	},
 	"Workshop": {
-		"ar": "ورشة", "cls": "M", "lv": 4, "tab": "serv", "cost": {"Wood": 20.0, "Stone": 14.0, "Scrap": 8.0},
+		"ar": "ورشة", "cls": "M", "lv": 3, "tab": "serv", "cost": {"Wood": 20.0, "Stone": 14.0, "Scrap": 8.0},
 		"time": 18.0, "housing": 0, "storage": false, "xp": 60.0, "scale": 1.9,
 		"gather": {"res": "Scrap", "yield": 4.0, "time": 5.0, "slots": 2},
 		"desc": "خردة لا تنضب: تفكيك وإصلاح (عاملان)."
+	},
+	"Diwan": {
+		"ar": "الديوان", "cls": "L", "lv": 3, "tab": "serv", "cost": {"Stone": 35.0, "Wood": 20.0, "Dinar": 30.0},
+		"time": 20.0, "housing": 0, "storage": false, "xp": 80.0, "scale": 2.2,
+		"gather": {}, "council": true,
+		"desc": "مجلس المستوطنة — يفعّل الضرائب والقرارات الجماعية."
 	}
 }
 const TABS := [["home", "سكن"], ["res", "موارد"], ["serv", "خدمات"]]
@@ -127,11 +212,19 @@ const GOALS := [
 	{"key": "workers", "text": "افتح «العمال» وقرّر من يجمع ماذا."},
 	{"key": "well", "text": "ابنِ بئرًا لماء قريب."},
 	{"key": "tent", "text": "ابنِ خيمة لاستقبال ناجين جدد."},
-	{"key": "level2", "text": "ارتقِ بالمخيم إلى المستوى 2."},
+	{"key": "storehouse", "text": "ابنِ مخزنًا لتقصير رحلات الجمع."},
 	{"key": "farm", "text": "ابنِ مزرعة لطعام ثابت."},
-	{"key": "storehouse", "text": "ابنِ مخزنًا لتقصير الرحلات."},
+	{"key": "pen", "text": "ابنِ حظيرة لتربية الماعز والدجاج."},
+	{"key": "level2", "text": "ارتقِ بالمستوطنة إلى المستوى 2."},
+	{"key": "kitchen", "text": "ابنِ مطبخًا لتحسين الطعام وخفض الاستهلاك."},
 	{"key": "pop10", "text": "اجمع 10 ناجين."},
-	{"key": "day30", "text": "اصمد حتى اليوم 30."}
+	{"key": "stone_house", "text": "ابنِ أول بيت من حجر القدس."},
+	{"key": "level3", "text": "ارتقِ إلى المستوى 3."},
+	{"key": "olive_press", "text": "ابنِ معصرة لعصر زيت الزيتون."},
+	{"key": "caravan", "text": "انتظر القافلة الأولى (اليوم 15)."},
+	{"key": "diwan", "text": "ابنِ الديوان: مجلس المستوطنة."},
+	{"key": "pop20", "text": "اجمع 20 ناجيًا."},
+	{"key": "day60", "text": "اصمد حتى اليوم 60."}
 ]
 
 # UI palette
@@ -243,12 +336,14 @@ class IconCanvas extends Control:
 
 var resources: Dictionary = START_RESOURCES.duplicate()
 var jobs: Dictionary = START_JOBS.duplicate()
-var income_today := {"Food": 0.0, "Water": 0.0, "Wood": 0.0, "Stone": 0.0, "Scrap": 0.0}
-var last_income := {"Food": 0.0, "Water": 0.0, "Wood": 0.0, "Stone": 0.0, "Scrap": 0.0}
+var income_today := {"Food": 0.0, "Water": 0.0, "Wood": 0.0, "Stone": 0.0, "Scrap": 0.0, "Oil": 0.0}
+var last_income := {"Food": 0.0, "Water": 0.0, "Wood": 0.0, "Stone": 0.0, "Scrap": 0.0, "Oil": 0.0}
 var day := 1
 var day_timer := 0.0
 var morale := 70.0
 var health := 100.0
+var hope := 50.0
+var discontent := 0.0
 var level := 1
 var xp := 0.0
 var peak_pop := START_POP
@@ -264,6 +359,12 @@ var ghost_plot := -1
 var inspected: Building = null
 var demolish_armed := false
 var new_armed := false
+var council_unlocked := false
+var tax_level_idx := 0
+var caravan_day := 0
+var event_cooldown := 0
+var kitchen_active := false
+var pending_event := -1
 var plateau_h := 0.0
 var buildings: Array[Building] = []
 var plots: Array[Plot] = []
@@ -346,7 +447,7 @@ var autosave_timer := 0.0
 
 func _ready() -> void:
 	rng.randomize()
-	ar_font = load("res://fonts/Cairo.ttf")
+	ar_font = load("res://fonts/Amiri-Regular.ttf")
 	_load_settings()
 	stone_texture = _make_stone_texture()
 	plateau_h = _natural_height(float(CAMP_CELL.x), float(CAMP_CELL.y))
@@ -650,6 +751,7 @@ func _plot_state(p: Plot) -> String:
 func _refresh_plots() -> void:
 	for p in plots:
 		var st := _plot_state(p)
+		var zone_key: String = PLOTS[p.idx].get("zone", "home")
 		if st == "built":
 			p.slab.visible = true
 			p.slab.material_override = _stone_mat(Color("#e2d6b8"))
@@ -659,9 +761,15 @@ func _refresh_plots() -> void:
 		if st == "hidden":
 			p.lock_label.visible = false
 			continue
-		p.slab.material_override = plot_mats[st]
+		if st == "empty":
+			# Show zone color hint on empty plots
+			var zc: Color = ZONE_COLORS.get(zone_key, Color(0.5, 0.5, 0.5, 0.3))
+			p.slab.material_override = _unlit_mat(zc)
+		else:
+			p.slab.material_override = plot_mats[st]
 		p.lock_label.visible = st == "locked"
-		p.lock_label.text = "المستوى %d" % p.lv
+		if st == "locked":
+			p.lock_label.text = "منطقة %s" % ZONE_AR.get(zone_key, "")
 
 
 func _plot_at_point(pt: Vector3, margin: float = 18.0) -> Plot:
@@ -1101,7 +1209,7 @@ func _build_top_bar() -> void:
 	lvcol.add_child(_label("المخيم", 15, C_GOLD))
 	xp_bar = _bar(C_GOLD, 70.0, 7.0)
 	lvcol.add_child(xp_bar)
-	for r in RES_NAMES:
+	for r in RES_TOP_BAR:
 		row.add_child(_res_chip(r))
 	var popc := VBoxContainer.new()
 	popc.add_theme_constant_override("separation", -4)
@@ -1191,11 +1299,23 @@ func _build_workers_sheet() -> void:
 	health_bar = _bar(Color("#d0644a"), 150.0, 9.0)
 	hcol.add_child(health_bar)
 	status.add_child(hcol)
+	var hope_col := VBoxContainer.new()
+	hope_col.add_child(_label("الأمل", 15, C_MUTED))
+	var hope_bar := _bar(Color("#7fc04f"), 150.0, 9.0)
+	hope_bar.name = "HopeBar"
+	hope_col.add_child(hope_bar)
+	status.add_child(hope_col)
+	var disc_col := VBoxContainer.new()
+	disc_col.add_child(_label("السخط", 15, C_MUTED))
+	var disc_bar := _bar(Color("#c04a3a"), 150.0, 9.0)
+	disc_bar.name = "DiscontentBar"
+	disc_col.add_child(disc_bar)
+	status.add_child(disc_col)
 	var hint := _label("اختر عدد من يجمع كل مورد. الأرقام الخضراء صافي الأمس.", 15, C_MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(380, 0)
 	box.add_child(hint)
-	for r in RES_NAMES:
+	for r in START_JOBS:
 		box.add_child(_job_row(r))
 	free_label = _label("", 19, Color("#cfe0a0"))
 	box.add_child(free_label)
@@ -1569,22 +1689,32 @@ func _refresh_ui() -> void:
 		var hi: float = LEVEL_XP[level]
 		xp_bar.value = clampf((xp - lo) / (hi - lo) * 100.0, 0.0, 100.0)
 	var n := float(survivors.size())
-	for r in RES_NAMES:
+	for r in RES_TOP_BAR:
 		var vl: Label = res_value_labels[r]
-		vl.text = str(int(round(float(resources[r]))))
+		vl.text = str(int(round(float(resources.get(r, 0.0)))))
 	pop_label.text = "%d/%d" % [survivors.size(), _housing_capacity()]
 	morale_bar.value = morale
 	health_bar.value = health
+	if is_instance_valid(workers_sheet):
+		var hb: Node = workers_sheet.find_child("HopeBar", true, false)
+		if hb is ProgressBar:
+			(hb as ProgressBar).value = hope
+		var db: Node = workers_sheet.find_child("DiscontentBar", true, false)
+		if db is ProgressBar:
+			(db as ProgressBar).value = discontent
 	var free := 0
 	for v in survivors:
 		if v.task == "idle":
 			free += 1
-	for r in RES_NAMES:
+	for r in jobs:
+		if not job_count_labels.has(r):
+			continue
 		var cl: Label = job_count_labels[r]
 		cl.text = str(int(jobs[r]))
-		var net: float = float(last_income[r])
+		var net: float = float(last_income.get(r, 0.0))
+		var food_mul := 0.75 if kitchen_active else 1.0
 		if r == "Food":
-			net -= n * FOOD_PER_VILLAGER
+			net -= n * FOOD_PER_VILLAGER * food_mul
 		elif r == "Water":
 			net -= n * WATER_PER_VILLAGER
 		var rl: Label = job_rate_labels[r]
@@ -1596,7 +1726,6 @@ func _refresh_ui() -> void:
 	free_label.text = "ناجون بلا عمل: %d" % free
 	if workers_sheet.visible:
 		_refresh_villager_list()
-	_check_goals()
 	if missions_sheet.visible:
 		_refresh_missions()
 
@@ -1644,34 +1773,23 @@ func _villager_status(v: Villager) -> String:
 
 func _goal_done(key: String) -> bool:
 	match key:
-		"workers":
-			return workers_opened
-		"well":
-			return _has_done("Well")
-		"tent":
-			return _has_done("Tent")
-		"level2":
-			return level >= 2
-		"farm":
-			return _has_done("Farm")
-		"storehouse":
-			return _has_done("Storehouse")
-		"pop10":
-			return survivors.size() >= 10
-		"day30":
-			return day >= 30
+		"workers": return workers_opened
+		"well": return _has_done("Well")
+		"tent": return _has_done("Tent")
+		"storehouse": return _has_done("Storehouse")
+		"farm": return _has_done("Farm")
+		"pen": return _has_done("Pen")
+		"level2": return level >= 2
+		"kitchen": return kitchen_active
+		"pop10": return survivors.size() >= 10
+		"stone_house": return _has_done("Stone House")
+		"level3": return level >= 3
+		"olive_press": return _has_done("Olive Press")
+		"caravan": return day >= CARAVAN_FIRST_DAY
+		"diwan": return council_unlocked
+		"pop20": return survivors.size() >= 20
+		"day60": return day >= 60
 	return false
-
-
-func _check_goals() -> void:
-	while goal_index < GOALS.size() and _goal_done(str(GOALS[goal_index]["key"])):
-		_toast("أُنجز الهدف: %s" % str(GOALS[goal_index]["text"]), 4.0)
-		_add_xp(15.0)
-		goal_index += 1
-	if goal_index < GOALS.size():
-		goal_label.text = str(GOALS[goal_index]["text"])
-	else:
-		goal_label.text = "أنجزت كل الأهداف. المزيد قريبًا."
 
 
 # ---------------------------------------------------------------- survivors
@@ -1684,8 +1802,8 @@ func _create_survivors() -> void:
 func _deliver(v: Villager) -> void:
 	var res := v.carry_res
 	var amt := v.carry_amt
-	resources[res] = float(resources[res]) + amt
-	income_today[res] = float(income_today[res]) + amt
+	resources[res] = float(resources.get(res, 0.0)) + amt
+	income_today[res] = float(income_today.get(res, 0.0)) + amt
 	_pop_text(v.node.position, "+%d" % int(amt), RES_COLORS[res])
 	_add_xp(amt * 0.1)
 	v.carry_amt = 0.0
@@ -1927,7 +2045,14 @@ func _complete_building(b: Building) -> void:
 	tw.tween_property(b.model, "scale", Vector3.ONE * b.base_scale, 0.35).from(Vector3.ONE * b.base_scale * 1.12)
 	_add_building_source(b)
 	_add_xp(float(def["xp"]))
+	if def.get("kitchen", false):
+		kitchen_active = true
+		_toast("المطبخ جاهز — الاستهلاك اليومي للطعام انخفض 25%!", 5.0)
+	elif def.get("council", false):
+		council_unlocked = true
+		_toast("افتُتح الديوان! يمكنك الآن فرض الضرائب وإصدار القرارات.", 6.0)
 	_assign_tasks()
+	_check_goals()
 	_refresh_ui()
 	_toast("اكتمل بناء «%s»!" % def["ar"])
 
@@ -2006,25 +2131,40 @@ func _demolish_pressed() -> void:
 func _advance_day() -> void:
 	day += 1
 	var n := float(survivors.size())
-	resources["Food"] = float(resources["Food"]) - n * FOOD_PER_VILLAGER
+
+	# Kitchen reduces food consumption by 25% if built
+	var food_mul := 0.75 if kitchen_active else 1.0
+	resources["Food"] = float(resources["Food"]) - n * FOOD_PER_VILLAGER * food_mul
 	resources["Water"] = float(resources["Water"]) - n * WATER_PER_VILLAGER
 	var shortage := float(resources["Food"]) < 0.0 or float(resources["Water"]) < 0.0
 	for r in RES_NAMES:
 		resources[r] = maxf(0.0, float(resources[r]))
 	last_income = income_today.duplicate()
-	for r in RES_NAMES:
+	for r in income_today:
 		income_today[r] = 0.0
+
+	# Tax income (requires council_unlocked)
+	if council_unlocked and tax_level_idx > 0:
+		var tax: Dictionary = TAX_LEVELS[tax_level_idx]
+		resources["Dinar"] = float(resources["Dinar"]) + float(tax["dinar"])
+		discontent = minf(100.0, discontent + float(tax["discontent"]))
+
+	# Regen finite natural sources
 	for s in sources:
 		if s.regen > 0.0 and not s.infinite:
 			s.amount = minf(s.max_amount, s.amount + s.max_amount * s.regen)
 			_update_source_visual(s)
+
 	var medics := 0
 	for v in survivors:
 		if v.skill == "Medicine":
 			medics += 1
+
 	if shortage:
 		health = maxf(0.0, health - 8.0)
 		morale = maxf(0.0, morale - 8.0)
+		hope = maxf(0.0, hope - 5.0)
+		discontent = minf(100.0, discontent + 4.0)
 		_toast("نقص في المؤن! ضع عمالًا أكثر على الطعام والماء.", 5.0)
 		if health <= 0.0:
 			_remove_villager()
@@ -2034,10 +2174,29 @@ func _advance_day() -> void:
 	else:
 		morale = minf(100.0, morale + 1.5)
 		health = minf(100.0, health + 2.0 + float(medics))
+		hope = minf(100.0, hope + 1.0)
+		discontent = maxf(0.0, discontent - 0.5)
 		_add_xp(3.0)
+
+	# Hope/discontent swing morale
+	morale = clampf(morale + (hope - 50.0) * 0.02 - discontent * 0.03, 0.0, 100.0)
+
 	if survivors.is_empty():
 		_trigger_game_over()
 		return
+
+	# Caravan arrives every CARAVAN_INTERVAL days after CARAVAN_FIRST_DAY
+	if day >= CARAVAN_FIRST_DAY and (day - CARAVAN_FIRST_DAY) % CARAVAN_INTERVAL == 0:
+		_trigger_caravan()
+
+	# Random moral event every 7+ days (cooldown)
+	if event_cooldown > 0:
+		event_cooldown -= 1
+	elif rng.randf() < 0.35 and MORAL_EVENTS.size() > 0:
+		pending_event = rng.randi() % MORAL_EVENTS.size()
+		_show_moral_event()
+		event_cooldown = 7
+
 	var fed := float(resources["Food"]) >= n * 3.0 and float(resources["Water"]) >= n * 3.0
 	if day % 3 == 0 and _housing_capacity() > survivors.size() and morale > 45.0 and fed and not shortage:
 		var v := _add_villager(NAMES[survivors.size() % NAMES.size()], SKILLS[rng.randi() % SKILLS.size()])
@@ -2046,8 +2205,153 @@ func _advance_day() -> void:
 	elif day % 3 == 0 and _housing_capacity() <= survivors.size():
 		_toast("ناجون يطلبون اللجوء، لكن لا مأوى. ابنِ خيمة.", 4.0)
 	peak_pop = maxi(peak_pop, survivors.size())
+	_check_goals()
 	_assign_tasks()
 	_refresh_ui()
+
+
+func _trigger_caravan() -> void:
+	var msg := "وصلت القافلة! يمكنك بيع الزيت أو شراء الخشب."
+	_toast(msg, 6.0)
+	# Simple auto-trade: sell Oil if we have surplus
+	var oil := float(resources.get("Oil", 0.0))
+	if oil >= 10.0:
+		var earned := floorf(oil * 0.5) * 2.0
+		resources["Oil"] = oil - floorf(oil * 0.5)
+		resources["Dinar"] = float(resources["Dinar"]) + earned
+		_toast("باعت القافلة %d وحدة زيت بـ%d دينار." % [int(floorf(oil * 0.5)), int(earned)], 5.0)
+		_add_xp(10.0)
+
+
+func _show_moral_event() -> void:
+	if pending_event < 0 or pending_event >= MORAL_EVENTS.size():
+		return
+	var ev: Dictionary = MORAL_EVENTS[pending_event]
+	# Build a simple dialog panel
+	var layer := CanvasLayer.new()
+	layer.layer = 20
+	add_child(layer)
+	var bg := ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.6)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(bg)
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.custom_minimum_size = Vector2(520, 0)
+	panel.layout_direction = Control.LAYOUT_DIRECTION_RTL
+	layer.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+	var lbl := Label.new()
+	lbl.text = ev["text"]
+	lbl.add_theme_font_override("font", ar_font)
+	lbl.add_theme_font_size_override("font_size", 17)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vb.add_child(lbl)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 10)
+	vb.add_child(hb)
+	var btn_a := Button.new()
+	btn_a.text = ev["a"]
+	btn_a.add_theme_font_override("font", ar_font)
+	btn_a.add_theme_font_size_override("font_size", 15)
+	btn_a.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(btn_a)
+	var btn_b := Button.new()
+	btn_b.text = ev["b"]
+	btn_b.add_theme_font_override("font", ar_font)
+	btn_b.add_theme_font_size_override("font_size", 15)
+	btn_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(btn_b)
+	var eff_a: String = ev["effect_a"]
+	var eff_b: String = ev["effect_b"]
+	btn_a.pressed.connect(func():
+		_apply_moral_effect(eff_a)
+		layer.queue_free()
+	)
+	btn_b.pressed.connect(func():
+		_apply_moral_effect(eff_b)
+		layer.queue_free()
+	)
+	pending_event = -1
+
+
+func _apply_moral_effect(eff: String) -> void:
+	match eff:
+		"refugee_accept":
+			if float(resources.get("Food", 0.0)) >= 20.0:
+				resources["Food"] = float(resources["Food"]) - 20.0
+				_add_villager(NAMES[survivors.size() % NAMES.size()], SKILLS[rng.randi() % SKILLS.size()])
+				_add_villager(NAMES[(survivors.size() + 1) % NAMES.size()], SKILLS[rng.randi() % SKILLS.size()])
+				_toast("استقبلت العائلة اللاجئة بحرارة.", 4.0)
+				hope = minf(100.0, hope + 15.0)
+			else:
+				_toast("ليس لديك طعام كافٍ لاستقبالهم.", 3.0)
+		"morale_boost":
+			morale = minf(100.0, morale + 10.0)
+			hope = minf(100.0, hope + 10.0)
+			_toast("وُزِّع الكنز على الجميع — ارتفعت المعنوية.", 4.0)
+		"dinar_bonus":
+			resources["Dinar"] = float(resources["Dinar"]) + 25.0
+			_toast("وُضع الكنز في الخزينة: +25 دينار.", 4.0)
+		"sell_food":
+			if float(resources.get("Food", 0.0)) >= 30.0:
+				resources["Food"] = float(resources["Food"]) - 30.0
+				resources["Dinar"] = float(resources["Dinar"]) + 20.0
+				_toast("بعت الفائض بـ20 دينار.", 4.0)
+			else:
+				_toast("لا يوجد فائض للبيع.", 3.0)
+		"treat_illness":
+			if float(resources.get("Scrap", 0.0)) >= 15.0:
+				resources["Scrap"] = float(resources["Scrap"]) - 15.0
+				health = minf(100.0, health + 20.0)
+				_toast("عُولج المرضى: الصحة ارتفعت.", 4.0)
+			else:
+				_toast("لا تملك خردة كافية.", 3.0)
+		"rest_illness":
+			health = maxf(0.0, health - 10.0)
+			_toast("الراحة وحدها: الصحة انخفضت قليلًا.", 4.0)
+		"train_craftsman":
+			if float(resources.get("Scrap", 0.0)) >= 10.0:
+				resources["Scrap"] = float(resources["Scrap"]) - 10.0
+				_add_xp(30.0)
+				_toast("تدرّب الشاب — XP +30.", 4.0)
+			else:
+				_toast("لا تملك خردة كافية للتدريب.", 3.0)
+		"build_trench":
+			if float(resources.get("Stone", 0.0)) >= 20.0:
+				resources["Stone"] = float(resources["Stone"]) - 20.0
+				hope = minf(100.0, hope + 8.0)
+				_toast("حُفر الخندق — شعر الناجون بالأمان.", 4.0)
+			else:
+				_toast("لا حجر كافٍ للحفر.", 3.0)
+		_:
+			pass
+
+
+func _check_goals() -> void:
+	while goal_index < GOALS.size() and _goal_done(str(GOALS[goal_index]["key"])):
+		_toast("أُنجز الهدف: %s" % str(GOALS[goal_index]["text"]), 4.0)
+		_add_xp(15.0)
+		goal_index += 1
+	if is_instance_valid(goal_label):
+		if goal_index < GOALS.size():
+			goal_label.text = str(GOALS[goal_index]["text"])
+		else:
+			goal_label.text = "أنجزت كل الأهداف. المزيد قريبًا."
+
+
+func _has_built(btype: String) -> bool:
+	for b in buildings:
+		if b.type == btype and b.done:
+			return true
+	return false
+
+
+func _has_done(btype: String) -> bool:
+	return _has_built(btype)
 
 
 func _remove_villager() -> void:
@@ -2138,7 +2442,10 @@ func _write_save(path: String, silent: bool) -> void:
 			amounts.append(s.amount)
 	var data := {
 		"version": SAVE_VERSION, "region": "Haifa", "resources": resources, "jobs": jobs, "day": day,
-		"morale": morale, "health": health, "goal": goal_index, "peak": peak_pop, "level": level, "xp": xp,
+		"morale": morale, "health": health, "hope": hope, "discontent": discontent,
+		"council_unlocked": council_unlocked, "tax_level_idx": tax_level_idx,
+		"kitchen_active": kitchen_active, "event_cooldown": event_cooldown,
+		"goal": goal_index, "peak": peak_pop, "level": level, "xp": xp,
 		"workers_opened": workers_opened, "buildings": blist, "villagers": vlist, "sources": amounts
 	}
 	var file := FileAccess.open(path, FileAccess.WRITE)
@@ -2184,11 +2491,17 @@ func _load_game(path: String) -> void:
 	for r in RES_NAMES:
 		resources[r] = float(saved_res.get(r, resources[r]))
 	var saved_jobs: Dictionary = d.get("jobs", {})
-	for r in RES_NAMES:
+	for r in START_JOBS:
 		jobs[r] = int(saved_jobs.get(r, 0))
 	day = int(d.get("day", day))
 	morale = float(d.get("morale", morale))
 	health = float(d.get("health", health))
+	hope = float(d.get("hope", 50.0))
+	discontent = float(d.get("discontent", 0.0))
+	council_unlocked = bool(d.get("council_unlocked", false))
+	tax_level_idx = clampi(int(d.get("tax_level_idx", 0)), 0, TAX_LEVELS.size() - 1)
+	kitchen_active = bool(d.get("kitchen_active", false))
+	event_cooldown = int(d.get("event_cooldown", 0))
 	goal_index = clampi(int(d.get("goal", 0)), 0, GOALS.size())
 	peak_pop = int(d.get("peak", START_POP))
 	level = clampi(int(d.get("level", 1)), 1, MAX_LEVEL)
@@ -2370,6 +2683,18 @@ func _mat(color: Color, rough: float = 0.95) -> StandardMaterial3D:
 	mat_cache[key] = m
 	return m
 
+
+func _unlit_mat(color: Color) -> StandardMaterial3D:
+	var key := "unlit_" + color.to_html()
+	if mat_cache.has(key):
+		return mat_cache[key]
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat_cache[key] = m
+	return m
+
 func _stone_mat(tint: Color = Color.WHITE) -> StandardMaterial3D:
 	var key := "stone_" + tint.to_html()
 	if mat_cache.has(key):
@@ -2480,7 +2805,7 @@ func _build_lighting() -> void:
 
 func _sum_jobs() -> int:
 	var n := 0
-	for r in RES_NAMES:
+	for r in jobs:
 		n += int(jobs[r])
 	return n
 
@@ -2488,19 +2813,13 @@ func _clamp_jobs() -> void:
 	while _sum_jobs() > survivors.size():
 		var worst := ""
 		var most := -1
-		for r in RES_NAMES:
+		for r in jobs:
 			if int(jobs[r]) > most:
 				most = int(jobs[r])
 				worst = r
 		if worst == "" or most <= 0:
 			break
 		jobs[worst] = most - 1
-
-func _has_done(type: String) -> bool:
-	for b in buildings:
-		if b.done and b.type == type:
-			return true
-	return false
 
 func _add_villager(vname: String, skill: String) -> Villager:
 	var v := Villager.new()
@@ -2647,7 +2966,7 @@ func _assign_tasks() -> void:
 				break
 			_send_build(v, b)
 			need -= 1
-	for r in RES_NAMES:
+	for r in jobs:
 		var want := int(jobs[r])
 		var have := _count_job(r)
 		while have < want:
