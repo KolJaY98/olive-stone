@@ -1,0 +1,30 @@
+; Olive & Stone - isometric colony simulator prototype
+config_version=5
+
+[application]
+
+config/icon="res://icon.png"
+config/name="الزيتون والحجر"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=6
+
+[rendering]
+
+textures/vram_compression/import_etc2_astc=true
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+
+[internationalization]
+
+locale/include_text_server_data=true

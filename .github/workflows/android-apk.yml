@@ -16,14 +16,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Unpack project
+      - name: Bump version code
         run: |
-          rm -rf project
-          mkdir project
-          unzip -q olive_stone_project.zip -d project
-          sed -i "s/^version\/code=.*/version\/code=${{ github.run_number }}/" project/export_presets.cfg
-          grep -E "^version/" project/export_presets.cfg
-          ls -la project
+          sed -i "s/^version\/code=.*/version\/code=${{ github.run_number }}/" export_presets.cfg
+          grep -E "^version/" export_presets.cfg
 
       - name: Install Android SDK packages
         run: |
@@ -75,12 +71,12 @@ jobs:
           cat "$HOME/.config/godot/editor_settings-4.tres"
 
       - name: Import project
-        run: godot --headless --path project --import || true
+        run: godot --headless --path . --import || true
 
       - name: Export debug APK
         run: |
           mkdir -p build
-          godot --headless --path project --export-debug "Android" "$GITHUB_WORKSPACE/build/olive_stone_debug.apk" 2>&1 | tee export.log
+          godot --headless --path . --export-debug "Android" "$GITHUB_WORKSPACE/build/olive_stone_debug.apk" 2>&1 | tee export.log
           test -s build/olive_stone_debug.apk
 
       - name: Upload APK
