@@ -6,7 +6,7 @@ extends Node3D
 # to resource points, gather, and carry loads back. Experience unlocks buildings and
 # building plots. Arabic, right-to-left interface.
 
-const VERSION := "2.2.0"
+const VERSION := "3.0.0"
 const GRID := 48
 const TILE_SIZE := 75.0
 const START_POP := 5
@@ -14,13 +14,14 @@ const BASE_HOUSING := 6
 const SAVE_PATH := "user://olive_stone_save.json"
 const AUTOSAVE_PATH := "user://olive_stone_autosave.json"
 const SETTINGS_PATH := "user://settings.cfg"
-const SAVE_VERSION := 6
+const SAVE_VERSION := 7
+const MIN_SAVE_VERSION := 6
 const WORLD_SEED := 987654
 const SEA_COLOR := Color("#477f91")
 const DAY_LENGTH := 25.0
 const WALK_SPEED := 70.0
-const FOOD_PER_VILLAGER := 1.0
-const WATER_PER_VILLAGER := 1.2
+const FOOD_PER_VILLAGER := 1.6
+const WATER_PER_VILLAGER := 1.7
 const AUTOSAVE_EVERY := 150.0
 const CAM_OFFSET := Vector3(1800, 2200, 2100)
 const CAMP_CELL := Vector2i(15, 24)
@@ -29,7 +30,7 @@ const PLATEAU_R1 := 7.6
 const TRAIL_CELL := 26.0
 const TRAIL_MAX := 900
 const MAX_LEVEL := 5
-const LEVEL_XP := [0.0, 60.0, 180.0, 400.0, 750.0]
+const LEVEL_XP := [0.0, 180.0, 650.0, 1500.0, 2700.0]
 const SEASON_DAYS := 20
 const SEASON_NAMES := ["ربيع", "صيف", "خريف", "شتاء"]
 const SEASON_AR := ["🌱 الربيع", "☀ الصيف", "🍂 الخريف", "❄ الشتاء"]
@@ -38,49 +39,99 @@ const SEASON_FOOD_MUL := [1.0, 1.0, 1.0, 1.2]
 const SEASON_SKY := [Color("#c8dff0"), Color("#d8eed0"), Color("#e8c870"), Color("#9ab8d0")]
 const SEASON_COLOR := [Color("#7acc60"), Color("#ffc840"), Color("#e87030"), Color("#80b0e0")]
 const PLACE_CELL := 88.0      # grid cell width in world units for free placement
-const PLAY_RADIUS := 480.0    # max building distance from camp center
+# Buildable territory radius per settlement level; roads extend it (see _in_territory).
+const TERRITORY_R := [430.0, 560.0, 700.0, 840.0, 980.0]
+const ROAD_REACH := 150.0     # building cells within this distance of a road are in territory
+const MAX_SLOPE := 70.0       # max height difference under a footprint
+const DAY_XP := 3.0
 
 # ── City Skylines systems ──────────────────────────────────────────────────────
-# Land value: how much each completed building radiates to nearby grid cells per day
+# Land value is recomputed every day as the sum of what nearby buildings radiate.
 const LAND_VALUE_SOURCES := {
+	"Camp":        {"radius": 3, "delta": 22.0},
 	"Mosque":      {"radius": 3, "delta": 28.0},
 	"Town Square": {"radius": 4, "delta": 24.0},
 	"Diwan":       {"radius": 3, "delta": 22.0},
-	"School":      {"radius": 3, "delta": 18.0},
-	"Library":     {"radius": 3, "delta": 18.0},
+	"Market":      {"radius": 2, "delta": 14.0},
+	"School":      {"radius": 3, "delta": 16.0},
+	"Library":     {"radius": 3, "delta": 16.0},
 	"Clinic":      {"radius": 2, "delta": 14.0},
-	"Plaza":       {"radius": 3, "delta": 12.0},
+	"Plaza":       {"radius": 3, "delta": 14.0},
 	"Well":        {"radius": 2, "delta":  8.0},
 	"Stone House": {"radius": 1, "delta":  5.0},
-	"Large House": {"radius": 1, "delta":  5.0},
+	"Large House": {"radius": 1, "delta":  6.0},
 	"Khan":        {"radius": 2, "delta": 10.0},
-	# Negative — noise / industrial pollution
-	"Quarry":      {"radius": 2, "delta": -22.0},
+	"Quarry":      {"radius": 2, "delta": -24.0},
 	"Workshop":    {"radius": 2, "delta": -16.0},
-	"Small Quarry":{"radius": 1, "delta": -10.0},
-	"Pen":         {"radius": 1, "delta":  -8.0},
+	"Small Quarry":{"radius": 1, "delta": -12.0},
+	"Woodcutter":  {"radius": 1, "delta":  -6.0},
+	"Olive Press": {"radius": 1, "delta":  -8.0},
+	"Pen":         {"radius": 1, "delta": -10.0},
+	"Barracks":    {"radius": 1, "delta":  -6.0},
 }
-# Service coverage: daily benefit per villager within radius (world units)
+# Service coverage: radius in world units; benefit scales with the share of housing covered.
 const SERVICE_COVERAGE := {
-	"Mosque":      {"radius": 220.0, "morale": 0.5},
-	"Town Square": {"radius": 160.0, "morale": 0.3, "discontent": -0.12},
-	"Plaza":       {"radius": 140.0, "morale": 0.25},
-	"Clinic":      {"radius": 160.0, "heal_bonus": 1.5},
-	"School":      {"radius": 200.0, "xp_bonus": 0.5},
-	"Library":     {"radius": 200.0, "xp_bonus": 1.0},
-	"Watchtower":  {"radius": 320.0},
+	"Mosque":      {"radius": 260.0, "morale": 1.2},
+	"Town Square": {"radius": 220.0, "morale": 0.8, "discontent": -0.5},
+	"Plaza":       {"radius": 180.0, "morale": 0.6},
+	"Clinic":      {"radius": 240.0, "heal_bonus": 1.0},
+	"School":      {"radius": 240.0, "xp_bonus": 0.5},
+	"Library":     {"radius": 240.0, "xp_bonus": 1.0},
 }
-# Minimum land value required to PLACE certain buildings
 const MIN_LAND_VALUE_REQ := {
-	"Stone House": 20.0,
-	"Large House": 25.0,
-	"Khan":        30.0,
-	"Library":     30.0,
-	"School":      25.0,
-	"Diwan":       35.0,
-	"Town Square": 25.0,
+	"Stone House": 12.0,
+	"Large House": 18.0,
+	"Khan":        22.0,
+	"Library":     10.0,
+	"School":      8.0,
+	"Diwan":       15.0,
 }
+# Zoning (painted on placement cells). Each building has a "cat".
+const ZONE_AR := {1: "سكنية", 2: "تجارية", 3: "صناعية", 4: "زراعية"}
+const ZONE_COLORS := {1: Color(0.35, 0.75, 0.35, 0.38), 2: Color(0.35, 0.6, 0.95, 0.38), 3: Color(0.95, 0.65, 0.2, 0.38), 4: Color(0.85, 0.85, 0.3, 0.38)}
+const ZONE_MATCH := {1: "res", 2: "com", 3: "ind", 4: "agri"}
+const ZONE_FORBID := {1: ["ind", "agri"], 2: ["ind", "agri"], 3: ["res"], 4: ["res", "ind"]}
+const ZONE_BONUS := 0.2
+# Roads painted by the player (TRAIL_CELL grid). Speed multipliers for walkers.
+const ROAD_DIRT := 1
+const ROAD_PAVED := 2
+const ROAD_SPEED := {0: 1.0, 1: 1.45, 2: 1.9}
+const TRAIL_SPEED := 1.15
+const PAVED_COST := 2.0       # stone per paved cell
+const ROAD_MAX := 1400
 
+# Winter/autumn firewood per villager per day (index = season).
+const HEAT_WOOD := [0.0, 0.0, 0.15, 0.4]
+const SOLDIER_FOOD := 0.5     # extra food per soldier on top of normal ration
+
+# Army (Whiteout-Survival style troop types, adapted).
+const UNITS := {
+	"guard":  {"ar": "حارس",  "power": 10.0, "cost": {"Scrap": 6.0, "Dinar": 4.0}, "wage": 0.3, "lv": 2, "color": Color("#8a3a2e")},
+	"archer": {"ar": "رامٍ",  "power": 15.0, "cost": {"Wood": 10.0, "Scrap": 6.0, "Dinar": 6.0}, "wage": 0.5, "lv": 3, "color": Color("#3a5a8a")},
+	"rider":  {"ar": "فارس",  "power": 26.0, "cost": {"Scrap": 10.0, "Food": 12.0, "Dinar": 12.0}, "wage": 0.9, "lv": 4, "color": Color("#5a3a7a"), "needs": "Stable"},
+}
+const UNIT_ORDER := ["guard", "archer", "rider"]
+const MILITIA_POWER := 1.5    # every non-soldier villager defends a little
+const RAID_FIRST_DAY := 20
+const RAID_MIN_GAP := 9
+const RAID_MAX_GAP := 13
+const BANDIT_LAIRS := [
+	{"ar": "وكر وادي النسناس", "power": 45.0, "loot": {"Dinar": 25.0, "Scrap": 20.0}},
+	{"ar": "مغارة الكرمل",      "power": 80.0, "loot": {"Dinar": 40.0, "Stone": 40.0}},
+	{"ar": "معسكر السهل الساحلي", "power": 130.0, "loot": {"Dinar": 70.0, "Wood": 60.0, "Scrap": 30.0}},
+	{"ar": "قلعة قطّاع الطرق",   "power": 200.0, "loot": {"Dinar": 120.0, "Oil": 20.0, "Scrap": 50.0}},
+]
+# Diwan policies (Cities: Skylines style). Effects are applied in _advance_day / gathering.
+const POLICIES := {
+	"water_ration": {"ar": "تقنين المياه",   "desc": "استهلاك الماء −25%، المعنويات −0.6/يوم"},
+	"long_shifts":  {"ar": "نوبات عمل طويلة", "desc": "الجمع أسرع 20%، الصحة −0.6/يوم"},
+	"militia":      {"ar": "التعبئة الشعبية", "desc": "دفاع الأهالي ×2، السخط +0.4/يوم"},
+	"forest_care":  {"ar": "حماية الأحراش",   "desc": "تجدد الخشب ×2، غلة الخشب −15%"},
+	"relief":       {"ar": "إعفاء الفقراء",   "desc": "الضريبة −50%، السخط −0.5/يوم"},
+}
+# Village trade tuning
+const TRADE_STOCK := 3        # times each offer can be used per day
+const CONTRACT_EVERY := 3     # days between contract deliveries
 const RES_NAMES := ["Food", "Water", "Wood", "Stone", "Scrap", "Oil", "Dinar"]
 const RES_AR := {
 	"Food": "طعام", "Water": "ماء", "Wood": "خشب",
@@ -93,8 +144,8 @@ const RES_COLORS := {
 }
 # Dinar doesn't count against workers; Oil produced by Olive Press
 const RES_TOP_BAR := ["Food", "Water", "Wood", "Stone", "Scrap", "Oil", "Dinar"]
-const START_RESOURCES := {"Food": 50.0, "Water": 60.0, "Wood": 60.0, "Stone": 40.0, "Scrap": 20.0, "Oil": 0.0, "Dinar": 10.0}
-const START_JOBS := {"Food": 2, "Water": 2, "Wood": 1, "Stone": 0, "Scrap": 0}
+const START_RESOURCES := {"Food": 60.0, "Water": 70.0, "Wood": 60.0, "Stone": 40.0, "Scrap": 20.0, "Oil": 0.0, "Dinar": 10.0}
+const START_JOBS := {"Food": 2, "Water": 2, "Wood": 1, "Stone": 0, "Scrap": 0, "Oil": 0}
 # Caravan trades: list of {day_from, res_buy, cost_dinar, res_sell, earn_dinar}
 const CARAVAN_INTERVAL := 10
 const CARAVAN_FIRST_DAY := 15
@@ -193,181 +244,219 @@ const PLOT_AR := {"S": "صغيرة", "M": "متوسطة", "L": "كبيرة"}
 # Zone painting is a separate layer: zones give bonuses, not restrictions.
 
 const BUILDINGS := {
+	# ── سكن ──
 	"Tent": {
-		"ar": "خيمة", "cls": "S", "lv": 1, "tab": "home", "cost": {"Wood": 12.0, "Scrap": 4.0},
-		"time": 6.0, "housing": 3, "gather": {}, "storage": false, "xp": 20.0, "scale": 1.0,
+		"ar": "خيمة", "cls": "S", "lv": 1, "tab": "home", "cat": "res", "cost": {"Wood": 12.0, "Scrap": 4.0},
+		"time": 6.0, "housing": 3, "gather": {}, "xp": 20.0, "scale": 1.0, "upkeep": {},
 		"desc": "مأوى مرتجل يتسع لـ3 ناجين."
 	},
-	"Well": {
-		"ar": "بئر", "cls": "S", "lv": 1, "tab": "res", "cost": {"Stone": 16.0, "Wood": 8.0},
-		"time": 10.0, "housing": 0, "storage": false, "xp": 25.0, "scale": 1.4,
-		"gather": {"res": "Water", "yield": 4.0, "time": 4.0, "slots": 3},
-		"desc": "ماء قريب لا ينضب (3 سقّائين).",
-		"upgrade": {"cost": {"Stone": 12.0, "Wood": 8.0}, "gather_yield": 6.0, "gather_slots": 4, "ar": "بئر معقودة", "desc": "4 سقّائين، 6 وحدة/جولة"}
-	},
-	"Storehouse": {
-		"ar": "مخزن", "cls": "M", "lv": 1, "tab": "serv", "cost": {"Wood": 22.0, "Stone": 8.0},
-		"time": 10.0, "housing": 0, "gather": {}, "storage": true, "xp": 30.0, "scale": 1.75,
-		"desc": "نقطة تسليم تقصّر رحلات الجمع."
-	},
-	"Farm": {
-		"ar": "مزرعة", "cls": "L", "lv": 1, "tab": "res", "cost": {"Wood": 14.0, "Stone": 6.0},
-		"time": 12.0, "housing": 0, "storage": false, "xp": 30.0, "scale": 2.05,
-		"gather": {"res": "Food", "yield": 5.0, "time": 5.0, "slots": 2},
-		"desc": "طعام لا ينضب بمحصول كبير (مزارعان).",
-		"upgrade": {"cost": {"Wood": 10.0, "Stone": 8.0}, "gather_yield": 8.0, "gather_slots": 3, "ar": "مزرعة مسقية", "desc": "3 مزارعين، 8 وحدة/جولة بالري"}
-	},
-	"Olive Grove": {
-		"ar": "بستان زيتون", "cls": "L", "lv": 2, "tab": "res", "cost": {"Wood": 16.0, "Stone": 5.0},
-		"time": 12.0, "housing": 0, "storage": false, "xp": 35.0, "scale": 2.1,
-		"gather": {"res": "Food", "yield": 3.5, "time": 4.0, "slots": 3},
-		"desc": "طعام لا ينضب بقطاف سريع (3 قطّافين)."
+	"Small House": {
+		"ar": "منزل صغير", "cls": "S", "lv": 1, "tab": "home", "cat": "res", "cost": {"Wood": 16.0, "Stone": 10.0},
+		"time": 10.0, "housing": 4, "gather": {}, "xp": 28.0, "scale": 1.2, "upkeep": {"Wood": 0.05}, "soft": true,
+		"desc": "بيت صغير دائم لـ4 ناجين."
 	},
 	"Stone House": {
-		"ar": "بيت حجري", "cls": "M", "lv": 2, "tab": "home", "cost": {"Wood": 20.0, "Stone": 22.0},
-		"time": 16.0, "housing": 6, "gather": {}, "storage": false, "xp": 45.0, "scale": 1.9,
-		"desc": "بيت من حجر القدس يتسع لـ6 ناجين."
-	},
-	"Pen": {
-		"ar": "حظيرة", "cls": "M", "lv": 2, "tab": "res", "cost": {"Wood": 22.0, "Stone": 10.0},
-		"time": 14.0, "housing": 0, "storage": false, "xp": 35.0, "scale": 1.85,
-		"gather": {"res": "Food", "yield": 2.5, "time": 6.0, "slots": 2},
-		"desc": "حظيرة ماعز ودجاج — بيض ولحم يومي (راعيان)."
-	},
-	"Kitchen": {
-		"ar": "مطبخ", "cls": "M", "lv": 2, "tab": "serv", "cost": {"Wood": 16.0, "Stone": 12.0, "Scrap": 5.0},
-		"time": 12.0, "housing": 0, "storage": false, "xp": 35.0, "scale": 1.8,
-		"gather": {}, "kitchen": true,
-		"desc": "يحوّل الطعام الخام إلى وجبات — يقلل الاستهلاك اليومي 25%."
-	},
-	"Olive Press": {
-		"ar": "معصرة زيتون", "cls": "M", "lv": 3, "tab": "res", "cost": {"Wood": 20.0, "Stone": 16.0},
-		"time": 14.0, "housing": 0, "storage": false, "xp": 40.0, "scale": 1.8,
-		"gather": {"res": "Oil", "yield": 3.0, "time": 6.0, "slots": 2},
-		"desc": "يعصر زيت الزيتون (2 عمال). الزيت يُباع للقوافل أو يُطبخ."
-	},
-	"Quarry": {
-		"ar": "مقلع", "cls": "L", "lv": 3, "tab": "res", "cost": {"Wood": 22.0, "Scrap": 6.0},
-		"time": 16.0, "housing": 0, "storage": false, "xp": 50.0, "scale": 2.05,
-		"gather": {"res": "Stone", "yield": 3.5, "time": 5.0, "slots": 3},
-		"desc": "حجر لا ينضب (3 قلّاعين)."
-	},
-	"Workshop": {
-		"ar": "ورشة", "cls": "M", "lv": 3, "tab": "serv", "cost": {"Wood": 20.0, "Stone": 14.0, "Scrap": 8.0},
-		"time": 18.0, "housing": 0, "storage": false, "xp": 60.0, "scale": 1.9,
-		"gather": {"res": "Scrap", "yield": 2.5, "time": 5.0, "slots": 2},
-		"desc": "خردة لا تنضب: تفكيك وإصلاح (عاملان)."
-	},
-	"Small Quarry": {
-		"ar": "مقلع صغير", "cls": "S", "lv": 1, "tab": "res", "cost": {"Wood": 8.0, "Scrap": 4.0},
-		"time": 8.0, "housing": 0, "storage": false, "xp": 22.0, "scale": 1.25,
-		"gather": {"res": "Stone", "yield": 2.0, "time": 5.0, "slots": 1},
-		"desc": "مقلع بسيط في الأنقاض — حجر مبكر (عامل واحد)."
-	},
-	"Stable": {
-		"ar": "إسطبل", "cls": "M", "lv": 2, "tab": "serv", "cost": {"Wood": 20.0, "Stone": 14.0},
-		"time": 14.0, "housing": 0, "storage": false, "xp": 40.0, "scale": 1.9,
-		"gather": {}, "stable": true,
-		"desc": "خيول للنقل — يضاعف الكميات عند التجارة مع القرى المستكشفة."
-	},
-	"Small House": {
-		"ar": "منزل صغير", "cls": "S", "lv": 1, "tab": "home", "cost": {"Wood": 16.0, "Stone": 10.0},
-		"time": 10.0, "housing": 4, "gather": {}, "storage": false, "xp": 28.0, "scale": 1.2,
-		"desc": "بيت صغير من الطوب — مأوى دائم لـ4 ناجين."
+		"ar": "بيت حجري", "cls": "M", "lv": 2, "tab": "home", "cat": "res", "cost": {"Wood": 20.0, "Stone": 22.0},
+		"time": 16.0, "housing": 6, "gather": {}, "xp": 45.0, "scale": 1.9, "upkeep": {"Stone": 0.1}, "soft": true,
+		"desc": "بيت من حجر القدس لـ6 ناجين. يحتاج قيمة أرض جيدة."
 	},
 	"Large House": {
-		"ar": "بيت عائلي", "cls": "L", "lv": 3, "tab": "home", "cost": {"Stone": 35.0, "Wood": 16.0},
-		"time": 22.0, "housing": 10, "gather": {}, "storage": false, "xp": 55.0, "scale": 2.15,
-		"desc": "منزل فلسطيني فسيح — يتسع لعائلة من 10 ناجين."
-	},
-	"Diwan": {
-		"ar": "الديوان", "cls": "L", "lv": 3, "tab": "serv", "cost": {"Stone": 35.0, "Wood": 20.0, "Dinar": 30.0},
-		"time": 20.0, "housing": 0, "storage": false, "xp": 80.0, "scale": 2.2,
-		"gather": {}, "council": true,
-		"desc": "مجلس المستوطنة — يفعّل الضرائب والقرارات الجماعية."
-	},
-	"Fishing Dock": {
-		"ar": "رصيف الصيد", "cls": "L", "lv": 2, "tab": "res", "cost": {"Wood": 28.0, "Stone": 16.0},
-		"time": 18.0, "housing": 0, "storage": false, "xp": 50.0, "scale": 2.1,
-		"gather": {"res": "Food", "yield": 5.0, "time": 4.0, "slots": 3},
-		"coastal": true,
-		"desc": "رصيف على شاطئ حيفا — سمك طازج يوميًا (3 صيادين). يُبنى قرب البحر.",
-		"upgrade": {"cost": {"Wood": 16.0, "Stone": 10.0}, "gather_yield": 8.0, "gather_slots": 4, "ar": "ميناء صيد", "desc": "4 صيادين، 8 وحدة/جولة"}
+		"ar": "بيت عائلي", "cls": "L", "lv": 3, "tab": "home", "cat": "res", "cost": {"Stone": 35.0, "Wood": 16.0},
+		"time": 22.0, "housing": 10, "gather": {}, "xp": 55.0, "scale": 2.15, "upkeep": {"Stone": 0.15}, "soft": true,
+		"desc": "منزل فلسطيني فسيح لعائلة من 10."
 	},
 	"Khan": {
-		"ar": "الخان", "cls": "L", "lv": 4, "tab": "home", "cost": {"Stone": 45.0, "Wood": 22.0, "Dinar": 20.0},
-		"time": 28.0, "housing": 15, "gather": {}, "storage": false, "xp": 80.0, "scale": 2.3,
-		"desc": "خان كبير — مأوى للمسافرين والتجار يتسع لـ15 ناجيًا."
+		"ar": "الخان", "cls": "L", "lv": 4, "tab": "home", "cat": "com", "cost": {"Stone": 45.0, "Wood": 22.0, "Dinar": 20.0},
+		"time": 28.0, "housing": 15, "gather": {}, "xp": 80.0, "scale": 2.3, "upkeep": {"Stone": 0.2, "Wood": 0.2}, "soft": true,
+		"trade_bonus": 0.1,
+		"desc": "مأوى لـ15 ناجيًا وتجارًا — يحسّن أسعار التجارة 10%."
 	},
-	# ── مبانٍ ترفيهية وخدمية ── v2.0.0
-	"Mosque": {
-		"ar": "جامع", "cls": "M", "lv": 2, "tab": "serv", "cost": {"Stone": 28.0, "Wood": 14.0},
-		"time": 18.0, "housing": 0, "gather": {}, "storage": false, "xp": 55.0, "scale": 1.95,
-		"mosque": true,
-		"desc": "يرفع المعنويات +15 كل 7 أيام (صلاة الجمعة)."
+	# ── زراعة ──
+	"Well": {
+		"ar": "بئر", "cls": "S", "lv": 1, "tab": "agri", "cat": "any", "cost": {"Stone": 16.0, "Wood": 8.0},
+		"time": 10.0, "housing": 0, "xp": 25.0, "scale": 1.4, "upkeep": {},
+		"gather": {"res": "Water", "yield": 4.0, "time": 5.0, "slots": 3},
+		"desc": "ماء قريب لا ينضب (3 سقّائين)."
+	},
+	"Farm": {
+		"ar": "مزرعة", "cls": "L", "lv": 1, "tab": "agri", "cat": "agri", "cost": {"Wood": 14.0, "Stone": 6.0},
+		"time": 12.0, "housing": 0, "xp": 30.0, "scale": 2.05, "upkeep": {"Water": 1.5},
+		"gather": {"res": "Food", "yield": 5.0, "time": 7.5, "slots": 2},
+		"desc": "طعام ثابت (مزارعان). تستهلك ماء الري يوميًا."
+	},
+	"Olive Grove": {
+		"ar": "بستان زيتون", "cls": "L", "lv": 2, "tab": "agri", "cat": "agri", "cost": {"Wood": 16.0, "Stone": 5.0},
+		"time": 12.0, "housing": 0, "xp": 35.0, "scale": 2.1, "upkeep": {},
+		"gather": {"res": "Food", "yield": 3.5, "time": 6.0, "slots": 3},
+		"desc": "زيتون وطعام (3 قطّافين). حصاد إضافي في الخريف."
+	},
+	"Pen": {
+		"ar": "حظيرة", "cls": "M", "lv": 2, "tab": "agri", "cat": "agri", "cost": {"Wood": 22.0, "Stone": 10.0},
+		"time": 14.0, "housing": 0, "xp": 35.0, "scale": 1.85, "upkeep": {"Water": 0.6},
+		"gather": {"res": "Food", "yield": 3.0, "time": 8.0, "slots": 2},
+		"desc": "ماعز ودجاج — بيض ولحم (راعيان). تشرب الماشية يوميًا."
+	},
+	"Fishing Dock": {
+		"ar": "رصيف الصيد", "cls": "L", "lv": 2, "tab": "agri", "cat": "agri", "cost": {"Wood": 28.0, "Stone": 16.0},
+		"time": 18.0, "housing": 0, "xp": 50.0, "scale": 2.1, "upkeep": {"Wood": 0.2},
+		"gather": {"res": "Food", "yield": 5.0, "time": 7.0, "slots": 3},
+		"coastal": true,
+		"desc": "على شاطئ البحر فقط — مدّ طريقًا إلى الساحل غربًا (3 صيادين)."
+	},
+	# ── صناعة ──
+	"Woodcutter": {
+		"ar": "كوخ الحطّاب", "cls": "S", "lv": 1, "tab": "ind", "cat": "ind", "cost": {"Wood": 10.0, "Stone": 6.0},
+		"time": 8.0, "housing": 0, "xp": 22.0, "scale": 1.2, "upkeep": {},
+		"gather": {"res": "Wood", "yield": 3.0, "time": 6.0, "slots": 2},
+		"desc": "يزرع الأحراش ويقطعها — حطب لا ينضب (حطّابان)."
+	},
+	"Small Quarry": {
+		"ar": "مقلع صغير", "cls": "S", "lv": 1, "tab": "ind", "cat": "ind", "cost": {"Wood": 8.0, "Scrap": 4.0},
+		"time": 8.0, "housing": 0, "xp": 22.0, "scale": 1.25, "upkeep": {},
+		"gather": {"res": "Stone", "yield": 2.0, "time": 5.0, "slots": 1},
+		"desc": "حجر مبكر من الأنقاض (عامل واحد). مزعج للجيران."
+	},
+	"Storehouse": {
+		"ar": "مخزن", "cls": "M", "lv": 1, "tab": "ind", "cat": "any", "cost": {"Wood": 22.0, "Stone": 8.0},
+		"time": 10.0, "housing": 0, "gather": {}, "xp": 30.0, "scale": 1.75, "upkeep": {"Wood": 0.1},
+		"desc": "نقطة تسليم تقصّر رحلات الجمع."
+	},
+	"Quarry": {
+		"ar": "مقلع", "cls": "L", "lv": 3, "tab": "ind", "cat": "ind", "cost": {"Wood": 22.0, "Scrap": 6.0},
+		"time": 16.0, "housing": 0, "xp": 50.0, "scale": 2.05, "upkeep": {"Scrap": 0.2},
+		"gather": {"res": "Stone", "yield": 3.5, "time": 5.0, "slots": 3},
+		"desc": "حجر لا ينضب (3 قلّاعين). تستهلك الأدوات (خردة)."
+	},
+	"Workshop": {
+		"ar": "ورشة", "cls": "M", "lv": 3, "tab": "ind", "cat": "ind", "cost": {"Wood": 20.0, "Stone": 14.0, "Scrap": 8.0},
+		"time": 18.0, "housing": 0, "xp": 60.0, "scale": 1.9, "upkeep": {"Wood": 0.3},
+		"gather": {"res": "Scrap", "yield": 2.5, "time": 5.0, "slots": 2},
+		"desc": "خردة وأدوات (عاملان). وقودها الخشب."
+	},
+	"Olive Press": {
+		"ar": "معصرة زيتون", "cls": "M", "lv": 3, "tab": "ind", "cat": "ind", "cost": {"Wood": 20.0, "Stone": 16.0},
+		"time": 14.0, "housing": 0, "xp": 40.0, "scale": 1.8, "upkeep": {"Wood": 0.2},
+		"gather": {"res": "Oil", "yield": 3.0, "time": 6.0, "slots": 2},
+		"desc": "زيت الزيتون: يضيء الجامع والمكتبة، يلزم العيادة والمطبخ، ويُباع غاليًا."
+	},
+	# ── خدمات ──
+	"Kitchen": {
+		"ar": "مطبخ", "cls": "M", "lv": 2, "tab": "serv", "cat": "any", "cost": {"Wood": 16.0, "Stone": 12.0, "Scrap": 5.0},
+		"time": 12.0, "housing": 0, "gather": {}, "xp": 35.0, "scale": 1.8, "upkeep": {"Wood": 0.8},
+		"kitchen": true,
+		"desc": "وجبات مشتركة — استهلاك الطعام −25%. يحتاج حطبًا للطبخ."
 	},
 	"Clinic": {
-		"ar": "عيادة", "cls": "M", "lv": 2, "tab": "serv", "cost": {"Stone": 22.0, "Wood": 12.0, "Scrap": 8.0},
-		"time": 16.0, "housing": 0, "gather": {}, "storage": false, "xp": 50.0, "scale": 1.85,
+		"ar": "عيادة", "cls": "M", "lv": 2, "tab": "serv", "cat": "any", "cost": {"Stone": 22.0, "Wood": 12.0, "Scrap": 8.0},
+		"time": 16.0, "housing": 0, "gather": {}, "xp": 50.0, "scale": 1.85, "upkeep": {"Oil": 0.3, "Dinar": 0.4},
 		"clinic": true,
-		"desc": "تسرّع تعافي الصحة وتحمي من تفشي الأمراض."
+		"desc": "شفاء أسرع لمن يسكن قربها. تحتاج زيتًا ودنانير."
 	},
 	"School": {
-		"ar": "مدرسة", "cls": "M", "lv": 3, "tab": "serv", "cost": {"Stone": 30.0, "Wood": 18.0},
-		"time": 20.0, "housing": 0, "gather": {}, "storage": false, "xp": 60.0, "scale": 1.9,
+		"ar": "مدرسة", "cls": "M", "lv": 3, "tab": "serv", "cat": "any", "cost": {"Stone": 30.0, "Wood": 18.0},
+		"time": 20.0, "housing": 0, "gather": {}, "xp": 60.0, "scale": 1.9, "upkeep": {"Dinar": 0.6, "Wood": 0.2},
 		"school": true,
-		"desc": "يضاعف كسب XP ويرفع مهارات الناجين تدريجيًا."
-	},
-	"Town Square": {
-		"ar": "ساحة المدينة", "cls": "L", "lv": 3, "tab": "serv", "cost": {"Stone": 35.0, "Wood": 16.0, "Dinar": 15.0},
-		"time": 22.0, "housing": 0, "gather": {}, "storage": false, "xp": 70.0, "scale": 2.1,
-		"town_square": true,
-		"desc": "تجلب وافدين جدد وتجاراً كل 5 أيام عوضًا عن كل 8."
-	},
-	"Watchtower": {
-		"ar": "برج المراقبة", "cls": "S", "lv": 1, "tab": "serv", "cost": {"Stone": 18.0, "Wood": 14.0},
-		"time": 10.0, "housing": 0, "gather": {}, "storage": false, "xp": 30.0, "scale": 1.3,
-		"watchtower": true,
-		"desc": "يُنبّه مبكرًا بالأحداث الطارئة ويمنح يومًا إضافيًا للاستعداد."
-	},
-	"Plaza": {
-		"ar": "ساحة عامة", "cls": "S", "lv": 2, "tab": "serv", "cost": {"Stone": 14.0, "Wood": 8.0},
-		"time": 10.0, "housing": 0, "gather": {}, "storage": false, "xp": 28.0, "scale": 1.2,
-		"plaza": true,
-		"desc": "فضاء مفتوح — يرفع المعنويات +5 يوميًا."
+		"desc": "خبرة أكثر لمن يسكن قربها. أجور المعلمين بالدينار."
 	},
 	"Library": {
-		"ar": "مكتبة", "cls": "M", "lv": 3, "tab": "serv", "cost": {"Stone": 26.0, "Wood": 16.0, "Dinar": 10.0},
-		"time": 18.0, "housing": 0, "gather": {}, "storage": false, "xp": 55.0, "scale": 1.85,
+		"ar": "مكتبة", "cls": "M", "lv": 3, "tab": "serv", "cat": "any", "cost": {"Stone": 26.0, "Wood": 16.0, "Dinar": 10.0},
+		"time": 18.0, "housing": 0, "gather": {}, "xp": 55.0, "scale": 1.85, "upkeep": {"Dinar": 0.5, "Oil": 0.2},
 		"library": true,
-		"desc": "تضاعف XP من التسليم وتفتح بحوثًا لاحقًا."
-	}
+		"desc": "تضاعف الخبرة من التسليم. قناديلها بالزيت."
+	},
+	"Diwan": {
+		"ar": "الديوان", "cls": "L", "lv": 3, "tab": "serv", "cat": "any", "cost": {"Stone": 35.0, "Wood": 20.0, "Dinar": 30.0},
+		"time": 20.0, "housing": 0, "gather": {}, "xp": 80.0, "scale": 2.2, "upkeep": {},
+		"council": true,
+		"desc": "مجلس المستوطنة: ضرائب وسياسات وقرارات."
+	},
+	# ── ترفيه ──
+	"Plaza": {
+		"ar": "ساحة عامة", "cls": "S", "lv": 2, "tab": "fun", "cat": "any", "cost": {"Stone": 14.0, "Wood": 8.0},
+		"time": 10.0, "housing": 0, "gather": {}, "xp": 28.0, "scale": 1.2, "upkeep": {},
+		"plaza": true,
+		"desc": "فضاء مفتوح يرفع المعنويات ويرفع قيمة الأرض."
+	},
+	"Mosque": {
+		"ar": "جامع", "cls": "M", "lv": 2, "tab": "fun", "cat": "any", "cost": {"Stone": 28.0, "Wood": 14.0},
+		"time": 18.0, "housing": 0, "gather": {}, "xp": 55.0, "scale": 1.95, "upkeep": {"Oil": 0.2},
+		"mosque": true,
+		"desc": "معنويات يومية لمن حوله، وصلاة الجمعة +15. قناديله بالزيت."
+	},
+	"Town Square": {
+		"ar": "ساحة المدينة", "cls": "L", "lv": 3, "tab": "fun", "cat": "any", "cost": {"Stone": 35.0, "Wood": 16.0, "Dinar": 15.0},
+		"time": 22.0, "housing": 0, "gather": {}, "xp": 70.0, "scale": 2.1, "upkeep": {"Dinar": 0.3},
+		"town_square": true,
+		"desc": "قلب المدينة: معنويات، سخط أقل، وافدون أسرع."
+	},
+	# ── تجارة ──
+	"Market": {
+		"ar": "السوق", "cls": "M", "lv": 2, "tab": "com", "cat": "com", "cost": {"Wood": 20.0, "Stone": 14.0, "Dinar": 8.0},
+		"time": 14.0, "housing": 0, "gather": {}, "xp": 45.0, "scale": 1.85, "upkeep": {},
+		"market": true, "trade_bonus": 0.1,
+		"desc": "دخل يومي بالدينار من حركة السكان + أسعار أفضل + عقود تجارية."
+	},
+	"Stable": {
+		"ar": "إسطبل", "cls": "M", "lv": 2, "tab": "com", "cat": "com", "cost": {"Wood": 20.0, "Stone": 14.0},
+		"time": 14.0, "housing": 0, "gather": {}, "xp": 40.0, "scale": 1.9, "upkeep": {"Food": 0.6, "Water": 0.4},
+		"stable": true,
+		"desc": "خيول: كميات تجارة مضاعفة، عقود تجارية، وفرسان للجيش."
+	},
+	# ── دفاع ──
+	"Watchtower": {
+		"ar": "برج المراقبة", "cls": "S", "lv": 1, "tab": "def", "cat": "any", "cost": {"Stone": 18.0, "Wood": 14.0},
+		"time": 10.0, "housing": 0, "gather": {}, "xp": 30.0, "scale": 1.3, "upkeep": {"Wood": 0.15},
+		"watchtower": true, "defense": 8.0,
+		"desc": "يكشف الغارات قبل يوم ويعطي دفاعًا +8. ناره بالحطب."
+	},
+	"Barracks": {
+		"ar": "الثكنة", "cls": "M", "lv": 2, "tab": "def", "cat": "any", "cost": {"Wood": 20.0, "Stone": 18.0, "Scrap": 6.0},
+		"time": 16.0, "housing": 0, "gather": {}, "xp": 45.0, "scale": 1.9, "upkeep": {"Dinar": 0.2},
+		"barracks": true,
+		"desc": "تجنيد حرّاس ورماة وفرسان (6 جنود لكل مستوى)."
+	},
+	"Wall": {
+		"ar": "سور حجري", "cls": "S", "lv": 3, "tab": "def", "cat": "any", "cost": {"Stone": 20.0},
+		"time": 8.0, "housing": 0, "gather": {}, "xp": 18.0, "scale": 1.0, "upkeep": {"Stone": 0.05}, "soft": true,
+		"defense": 12.0,
+		"desc": "قطعة سور: دفاع +12 (حتى 8 قطع)."
+	},
 }
-const TABS := [["home", "سكن"], ["res", "موارد"], ["serv", "خدمات"]]
+const TABS := [["home", "سكن"], ["agri", "زراعة"], ["ind", "صناعة"], ["serv", "خدمات"], ["fun", "ترفيه"], ["com", "تجارة"], ["def", "دفاع"]]
 
 const GOALS := [
 	{"key": "workers", "text": "افتح «العمال» وقرّر من يجمع ماذا."},
 	{"key": "well", "text": "ابنِ بئرًا لماء قريب."},
 	{"key": "tent", "text": "ابنِ خيمة لاستقبال ناجين جدد."},
+	{"key": "road", "text": "افتح «التخطيط» وارسم طريقًا ترابيًا (المشي عليه أسرع)."},
 	{"key": "storehouse", "text": "ابنِ مخزنًا لتقصير رحلات الجمع."},
-	{"key": "farm", "text": "ابنِ مزرعة لطعام ثابت."},
-	{"key": "pen", "text": "ابنِ حظيرة لتربية الماعز والدجاج."},
+	{"key": "farm", "text": "ابنِ مزرعة لطعام ثابت (تحتاج ماء ري)."},
+	{"key": "zone", "text": "حدّد منطقة سكنية من «التخطيط» — البيوت فيها أوسع."},
 	{"key": "level2", "text": "ارتقِ بالمستوطنة إلى المستوى 2."},
-	{"key": "kitchen", "text": "ابنِ مطبخًا لتحسين الطعام وخفض الاستهلاك."},
+	{"key": "explore", "text": "اكتشف قرية ناجين من «القرى»."},
+	{"key": "trade", "text": "بِع فائضًا لقرية مقابل دنانير."},
+	{"key": "barracks", "text": "ابنِ ثكنة وجنّد حارسين — الغارات تبدأ اليوم 20."},
+	{"key": "market", "text": "ابنِ سوقًا لدخل يومي من الدنانير."},
+	{"key": "kitchen", "text": "ابنِ مطبخًا لخفض استهلاك الطعام."},
 	{"key": "pop10", "text": "اجمع 10 ناجين."},
+	{"key": "defend", "text": "اصمد أمام أول غارة."},
 	{"key": "stone_house", "text": "ابنِ أول بيت من حجر القدس."},
 	{"key": "level3", "text": "ارتقِ إلى المستوى 3."},
-	{"key": "olive_press", "text": "ابنِ معصرة لعصر زيت الزيتون."},
-	{"key": "caravan", "text": "انتظر القافلة الأولى (اليوم 15)."},
+	{"key": "olive_press", "text": "ابنِ معصرة — الزيت يُضيء ويُداوي ويُباع."},
 	{"key": "diwan", "text": "ابنِ الديوان: مجلس المستوطنة."},
+	{"key": "contract", "text": "وقّع عقدًا تجاريًا مع قرية."},
+	{"key": "upgrade", "text": "رقِّ أي مبنى إلى المستوى 2."},
 	{"key": "pop20", "text": "اجمع 20 ناجيًا."},
-	{"key": "day60", "text": "اصمد حتى اليوم 60."},
-	{"key": "fishing_dock", "text": "ابنِ رصيف الصيد على شاطئ حيفا."},
+	{"key": "fishing_dock", "text": "مدّ طريقًا إلى الساحل وابنِ رصيف الصيد."},
+	{"key": "lair", "text": "طهّر وكرًا للّصوص بجيشك."},
 	{"key": "level4", "text": "ارتقِ إلى المستوى 4."},
-	{"key": "khan", "text": "ابنِ الخان — مأوى للمسافرين والتجار."},
-	{"key": "mosque", "text": "ابنِ جامعًا لرفع المعنويات كل جمعة."},
+	{"key": "mosque", "text": "ابنِ جامعًا قرب البيوت."},
 	{"key": "clinic", "text": "ابنِ عيادة لحماية صحة الناجين."},
-	{"key": "town_square", "text": "ابنِ ساحة المدينة لجلب الوافدين بسرعة."},
+	{"key": "khan", "text": "ابنِ الخان — مأوى للمسافرين والتجار."},
+	{"key": "town_square", "text": "ابنِ ساحة المدينة."},
+	{"key": "upgrade3", "text": "رقِّ مبنى إلى المستوى 3."},
+	{"key": "day60", "text": "اصمد حتى اليوم 60."},
+	{"key": "level5", "text": "ارتقِ إلى المستوى 5."},
 	{"key": "day90", "text": "اصمد حتى اليوم 90."}
 ]
 
@@ -393,7 +482,10 @@ class Building:
 	var model: Node3D
 	var scaffold: Node3D
 	var label: Label3D
-	var upgrade_level := 0
+	var lvl := 1
+	var rot := 0.0
+	var active := true
+	var zone_bonus := false
 
 
 class Plot:
@@ -442,6 +534,8 @@ class Villager:
 	var wait := 0.0
 	var timer := 0.0
 	var phase := 0.0
+	var unit := ""
+	var away := false
 
 
 # Simple vector icons drawn in code (no image assets needed).
@@ -506,6 +600,22 @@ class IconCanvas extends Control:
 				draw_rect(Rect2(c + Vector2(-9, -8) * u, Vector2(18, 3) * u), color)
 				draw_rect(Rect2(c + Vector2(-9, 5) * u, Vector2(18, 3) * u), color)
 				draw_rect(Rect2(c + Vector2(-3, -1.5) * u, Vector2(6, 3) * u), color.darkened(0.3))
+			"army":
+				# Shield with a spear
+				draw_colored_polygon(PackedVector2Array([c + Vector2(-8, -9) * u, c + Vector2(8, -9) * u, c + Vector2(8, 1) * u, c + Vector2(0, 10) * u, c + Vector2(-8, 1) * u]), color)
+				draw_line(c + Vector2(0, -7) * u, c + Vector2(0, 7) * u, Color(0.15, 0.17, 0.1), 2.0)
+				draw_line(c + Vector2(-6, -2) * u, c + Vector2(6, -2) * u, Color(0.15, 0.17, 0.1), 2.0)
+			"coins":
+				for ci in range(3):
+					draw_circle(c + Vector2(-5 + ci * 5, 4 - ci * 5) * u, 5.5 * u, color.darkened(0.08 * ci))
+					draw_arc(c + Vector2(-5 + ci * 5, 4 - ci * 5) * u, 3.4 * u, 0, TAU, 16, Color(0.15, 0.17, 0.1, 0.6), 1.2)
+			"plan":
+				# Map grid with a pin
+				draw_rect(Rect2(c + Vector2(-10, -8) * u, Vector2(20, 16) * u), color, false, 2.0)
+				draw_line(c + Vector2(-3, -8) * u, c + Vector2(-3, 8) * u, color, 1.4)
+				draw_line(c + Vector2(4, -8) * u, c + Vector2(4, 8) * u, color, 1.4)
+				draw_line(c + Vector2(-10, 0) * u, c + Vector2(10, 0) * u, color, 1.4)
+				draw_circle(c + Vector2(4, -3) * u, 3.2 * u, Color("#e85040"))
 			"lv":
 				# Land value heatmap — layered squares in gradient
 				for li in range(3):
@@ -549,7 +659,6 @@ var council_unlocked := false
 var tax_level_idx := 0
 var caravan_day := 0
 var event_cooldown := 0
-var kitchen_active := false
 var pending_event := -1
 var discovered_villages: Array[int] = []
 var exploring := false
@@ -573,6 +682,7 @@ var no_source_day := {}
 var trail_counts := {}
 var trail_mm: MultiMesh
 var trail_used := 0
+var ruin_nodes: Array = []
 
 # ── CS systems state ──────────────────────────────────────────────────────────
 var land_value: Dictionary = {}   # Vector2i(gx,gz) → float 0-100
@@ -581,9 +691,61 @@ var demand_production := 50.0
 var demand_services  := 50.0
 var lv_overlay       := false
 var lv_overlay_root: Node3D = null
-var service_xp_mult  := 1.0   # updated daily by _apply_service_coverage
-var service_heal_mult := 1.0  # updated daily by _apply_service_coverage
+var service_xp_mult  := 1.0
+var service_heal_mult := 1.0
+var coverage_morale := 0.0
+var zones: Dictionary = {}        # Vector2i placement cell → zone id
+var zone_overlay_root: Node3D = null
+var roads: Dictionary = {}        # Vector2i trail cell → ROAD_DIRT / ROAD_PAVED
+var road_mm := {}                 # road type → MultiMesh
+var plan_mode := ""               # "", road_dirt, road_paved, road_erase, zone_1..4, zone_erase
+var plan_sheet: PanelContainer
+var plan_buttons := {}
+var territory_ring: MultiMeshInstance3D
+var coverage_ring: MultiMeshInstance3D
 
+# ── economy ──
+var last_consumption: Dictionary = {}
+var budget_lines: Array = []      # [label, amount] Dinar flows of the last day
+var unpaid_notes: Array[String] = []
+var economy_sheet: PanelContainer
+var economy_list: VBoxContainer
+var policies: Dictionary = {}     # key → true when enabled
+var happiness_notes: Array = []   # [label, delta] last day morale factors
+
+# ── trade ──
+var village_state: Dictionary = {}  # idx → {"rel": float, "used": {offer_key: int}}
+var contracts: Array = []           # {"v": idx, "kind": "export"/"import", "res", "qty", "dinar", "next": day}
+var requests: Array = []            # {"v": idx, "res", "qty", "reward", "until": day}
+var trade_modal_village := -1
+var trades_done := 0
+var contracts_signed := 0
+
+# ── army ──
+var army_sheet: PanelContainer
+var army_list: VBoxContainer
+var raid_next_day := RAID_FIRST_DAY
+var raid_strength := 0.0
+var raid_warned := false
+var raid_node: Node3D = null
+var raid_timer := 0.0
+var raids_won := 0
+var raids_lost := 0
+var lairs_cleared := 0
+var expedition_day := -1
+var expedition_lair := -1
+
+# ── touch scrolling for sheets ──
+var scroll_targets: Array = []    # ScrollContainers that follow finger drags
+var scroll_active: ScrollContainer = null
+var scroll_press := Vector2.ZERO
+var scroll_dragged := false
+var scroll_pressing := false
+
+var ui_font: Font
+var ui_font_bold: Font
+var title_font: Font
+var shadows_on := true
 var camera: Camera3D
 var camera_target := Vector3.ZERO
 var terrain_root: Node3D
@@ -628,9 +790,10 @@ var build_tab := "home"
 var tab_buttons := {}
 var cards_box: HBoxContainer
 var build_scroll: ScrollContainer
-var road_mode := false
-var drag_in_sheet := false
+
 var council_btn: Button
+var army_btn: Button
+var trade_btn: Button
 var place_bar: PanelContainer
 var place_label: Label
 var confirm_btn: Button
@@ -649,6 +812,7 @@ var missions_sheet: PanelContainer
 var missions_list: VBoxContainer
 var menu_layer: Control
 var text_size_btn: Button
+var shadow_btn: Button
 var new_btn: Button
 var over_layer: Control
 var over_label: Label
@@ -669,7 +833,11 @@ var autosave_timer := 0.0
 
 func _ready() -> void:
 	rng.randomize()
-	ar_font = load("res://fonts/Amiri-Regular.ttf")
+	var cairo: Font = load("res://fonts/Cairo.ttf")
+	ui_font = _font_weight(cairo, 600)
+	ui_font_bold = _font_weight(cairo, 800)
+	ar_font = ui_font_bold
+	title_font = load("res://fonts/Amiri-Regular.ttf")
 	_load_settings()
 	stone_texture = _make_stone_texture()
 	plateau_h = _natural_height(float(CAMP_CELL.x), float(CAMP_CELL.y))
@@ -680,12 +848,14 @@ func _ready() -> void:
 	_generate_sources()
 	_build_camp()
 	_build_trails()
+	_build_roads()
 	_build_camera()
 	_build_lighting()
 	_build_ghost()
 	_build_ui()
 	_create_survivors()
 	_assign_tasks()
+	_check_goals()
 	_refresh_ui()
 	# Welcome toast fires when the player actually starts/continues from the start screen
 
@@ -887,6 +1057,7 @@ func _build_camp() -> void:
 		piece.position = Vector3(p.x, _height_at_world(p.x, p.z), p.z)
 		piece.rotation_degrees.y = wr.randf_range(0.0, 360.0)
 		terrain_root.add_child(piece)
+		ruin_nodes.append(piece)
 		match i % 3:
 			0:
 				_box(piece, Vector3(44, 20, 8), Vector3(0, 8, 0), Color("#d9cdb0"), true)
@@ -944,6 +1115,8 @@ func _refresh_plots() -> void:
 
 func _plot_at_point(pt: Vector3, margin: float = 18.0) -> Plot:
 	for p in plots:
+		if p.building == null:
+			continue
 		if absf(pt.x - p.pos.x) <= p.size.x * 0.5 + margin and absf(pt.z - p.pos.z) <= p.size.y * 0.5 + margin:
 			return p
 	return null
@@ -955,8 +1128,40 @@ func _world_to_grid(wx: float, wz: float) -> Vector2i:
 	return Vector2i(roundi((wx - camp_pos.x) / PLACE_CELL), roundi((wz - camp_pos.z) / PLACE_CELL))
 
 
+func _cell_world(cell: Vector2i) -> Vector2:
+	return Vector2(camp_pos.x + float(cell.x) * PLACE_CELL, camp_pos.z + float(cell.y) * PLACE_CELL)
+
+
 func _grid_to_world(gx: int, gz: int) -> Vector3:
-	return Vector3(camp_pos.x + float(gx) * PLACE_CELL, plateau_h, camp_pos.z + float(gz) * PLACE_CELL)
+	var c := _cell_world(Vector2i(gx, gz))
+	return Vector3(c.x, _height_at_world(c.x, c.y), c.y)
+
+
+# Footprints: S = 1 cell, M = 2×1 (along x), L = 2×2. The anchor is the lowest cell.
+func _fp_offset(cls: String) -> Vector2:
+	return Vector2(0.0 if cls == "S" else 0.5, 0.5 if cls == "L" else 0.0)
+
+
+func _anchor_from_world(wx: float, wz: float, cls: String) -> Vector2i:
+	var o := _fp_offset(cls)
+	return Vector2i(roundi((wx - camp_pos.x) / PLACE_CELL - o.x), roundi((wz - camp_pos.z) / PLACE_CELL - o.y))
+
+
+func _footprint_center(gx: int, gz: int, cls: String) -> Vector2:
+	var o := _fp_offset(cls)
+	return Vector2(camp_pos.x + (float(gx) + o.x) * PLACE_CELL, camp_pos.z + (float(gz) + o.y) * PLACE_CELL)
+
+
+# (lowest, highest) terrain height under a rectangle.
+func _footprint_heights(center: Vector2, size: Vector2) -> Vector2:
+	var lo := INF
+	var hi := -INF
+	for fx in [-0.5, 0.0, 0.5]:
+		for fz in [-0.5, 0.0, 0.5]:
+			var h := _height_at_world(center.x + fx * size.x, center.y + fz * size.y)
+			lo = minf(lo, h)
+			hi = maxf(hi, h)
+	return Vector2(lo, hi)
 
 
 func _cells_for(gx: int, gz: int, cls: String) -> Array[Vector2i]:
@@ -975,30 +1180,130 @@ func _cells_for(gx: int, gz: int, cls: String) -> Array[Vector2i]:
 	return cells
 
 
-func _can_place(gx: int, gz: int, cls: String, type: String = "") -> bool:
-	var cells := _cells_for(gx, gz, cls)
-	if cells.is_empty():
-		return false
-	var is_coastal := type != "" and BUILDINGS.has(type) and bool(BUILDINGS[type].get("coastal", false))
-	var near_coast := false
-	for cell in cells:
+func _cells_free(gx: int, gz: int, cls: String) -> bool:
+	for cell in _cells_for(gx, gz, cls):
 		if occupied_cells.has(cell):
 			return false
-		var wx := camp_pos.x + float(cell.x) * PLACE_CELL
-		var wz := camp_pos.z + float(cell.y) * PLACE_CELL
-		if Vector2(wx - camp_pos.x, wz - camp_pos.z).length() > PLAY_RADIUS:
-			return false
-		if is_coastal and wx < camp_pos.x - 200.0:
-			near_coast = true
-	if is_coastal and not near_coast:
-		return false
-	# Land value requirement
-	var min_lv := float(MIN_LAND_VALUE_REQ.get(type, 0.0))
-	if min_lv > 0.0 and _get_land_value(gx, gz) < min_lv:
-		return false
 	return true
 
 
+func _territory_radius() -> float:
+	return float(TERRITORY_R[clampi(level - 1, 0, TERRITORY_R.size() - 1)])
+
+
+func _road_center(k: Vector2i) -> Vector2:
+	return Vector2((float(k.x) + 0.5) * TRAIL_CELL, (float(k.y) + 0.5) * TRAIL_CELL)
+
+
+func _near_road(wx: float, wz: float, reach: float) -> bool:
+	var p := Vector2(wx, wz)
+	for k in roads:
+		if _road_center(k).distance_to(p) <= reach:
+			return true
+	return false
+
+
+func _in_territory(wx: float, wz: float) -> bool:
+	if Vector2(wx - camp_pos.x, wz - camp_pos.z).length() <= _territory_radius():
+		return true
+	return _near_road(wx, wz, ROAD_REACH)
+
+
+# Distance (in terrain tiles) east of the shoreline; negative means sea.
+func _coast_tiles(wx: float, wz: float) -> float:
+	var tgx := wx / TILE_SIZE + GRID / 2.0 - 0.5
+	var tgz := wz / TILE_SIZE + GRID / 2.0 - 0.5
+	return tgx - _coastline_x(tgz)
+
+
+func _is_land_world(wx: float, wz: float) -> bool:
+	return _coast_tiles(wx, wz) >= 0.9
+
+
+func _place_problem(gx: int, gz: int, cls: String, type: String) -> String:
+	var def: Dictionary = BUILDINGS[type]
+	var cat := str(def.get("cat", "any"))
+	var coastal := bool(def.get("coastal", false))
+	var cells := _cells_for(gx, gz, cls)
+	var center := _footprint_center(gx, gz, cls)
+	var size: Vector2 = PLOT_SIZES[cls]
+	for cell in cells:
+		if occupied_cells.has(cell):
+			return "المكان مشغول بمبنى آخر."
+		var cw := _cell_world(cell)
+		if not _in_territory(cw.x, cw.y):
+			return "خارج حدود المستوطنة — مدّ طريقًا من «التخطيط» أو ارتقِ بالمستوى."
+		if not coastal and not _is_land_world(cw.x, cw.y):
+			return "لا يمكن البناء على الماء."
+		var z := int(zones.get(cell, 0))
+		if z > 0 and (ZONE_FORBID[z] as Array).has(cat):
+			return "«%s» ممنوع في المنطقة %s." % [def["ar"], ZONE_AR[z]]
+	if coastal:
+		var ct := _coast_tiles(center.x, center.y)
+		if ct > 2.6 or ct < 0.2:
+			return "رصيف الصيد يجب أن يكون على خط الشاطئ تمامًا (غرب المخيم)."
+	else:
+		var hr := _footprint_heights(center, size)
+		if hr.y - hr.x > MAX_SLOPE:
+			return "المنحدر شديد جدًا هنا — اختر سفحًا ألطف."
+	var min_lv := float(MIN_LAND_VALUE_REQ.get(type, 0.0))
+	if min_lv > 0.0:
+		var lv_here := _footprint_land_value(gx, gz, cls)
+		if lv_here < min_lv:
+			return "قيمة الأرض منخفضة (تحتاج %d، هنا %d) — ابنِ قرب المخيم أو جامع أو ساحة." % [int(min_lv), int(lv_here)]
+	return ""
+
+
+func _can_place(gx: int, gz: int, cls: String, type: String = "") -> bool:
+	if type == "":
+		return _cells_free(gx, gz, cls)
+	return _place_problem(gx, gz, cls, type) == ""
+
+
+func _footprint_land_value(gx: int, gz: int, cls: String) -> float:
+	var cells := _cells_for(gx, gz, cls)
+	var total := 0.0
+	for cell in cells:
+		total += _get_land_value(cell.x, cell.y)
+	return total / float(cells.size())
+
+
+func _zone_matches(gx: int, gz: int, cls: String, cat: String) -> bool:
+	if cat == "any":
+		return false
+	for cell in _cells_for(gx, gz, cls):
+		var z := int(zones.get(cell, 0))
+		if z == 0 or ZONE_MATCH[z] != cat:
+			return false
+	return true
+
+
+# Door (+z of every model) turns toward the nearest road, otherwise toward the camp fire.
+func _facing_for(center: Vector2, cls: String) -> float:
+	var target := Vector2(camp_pos.x, camp_pos.z)
+	var best := 340.0
+	for k in roads:
+		var rc := _road_center(k)
+		var d := rc.distance_to(center)
+		if d < best and d > 20.0:
+			best = d
+			target = rc
+	var dir := target - center
+	if dir.length() < 1.0:
+		return 0.0
+	if cls == "M":
+		return 0.0 if dir.y >= 0.0 else 180.0
+	if absf(dir.x) > absf(dir.y):
+		return 90.0 if dir.x > 0.0 else 270.0
+	return 0.0 if dir.y >= 0.0 else 180.0
+
+
+func _clear_ruins_near(center: Vector2, size: Vector2) -> void:
+	for r in ruin_nodes:
+		var rn: Node3D = r
+		if is_instance_valid(rn) and rn.visible:
+			if absf(rn.position.x - center.x) < size.x * 0.5 + 30.0 and absf(rn.position.z - center.y) < size.y * 0.5 + 30.0:
+				rn.visible = false
 func _create_dynamic_plot(gx: int, gz: int, cls: String) -> Plot:
 	var p := Plot.new()
 	p.idx = plots.size()
@@ -1007,7 +1312,9 @@ func _create_dynamic_plot(gx: int, gz: int, cls: String) -> Plot:
 	p.gx = gx
 	p.gz = gz
 	p.size = PLOT_SIZES[cls]
-	p.pos = _grid_to_world(gx, gz)
+	var c := _footprint_center(gx, gz, cls)
+	var hr := _footprint_heights(c, p.size)
+	p.pos = Vector3(c.x, hr.y, c.y)
 	p.node = Node3D.new()
 	p.node.position = p.pos
 	building_root.add_child(p.node)
@@ -1018,12 +1325,23 @@ func _create_dynamic_plot(gx: int, gz: int, cls: String) -> Plot:
 	p.slab.position = Vector3(0, 1.0, 0)
 	p.slab.material_override = _stone_mat(Color("#e2d6b8"))
 	p.node.add_child(p.slab)
+	# On a slope the building stands on a stone terrace (podium) down to the lowest ground.
+	var drop := hr.y - hr.x
+	if drop > 1.5:
+		var pod := MeshInstance3D.new()
+		var pm := BoxMesh.new()
+		pm.size = Vector3(p.size.x + 6.0, drop + 4.0, p.size.y + 6.0)
+		pod.mesh = pm
+		pod.position = Vector3(0, -(drop + 4.0) * 0.5 + 1.0, 0)
+		pod.material_override = _stone_mat(Color("#cdbf9c"))
+		p.node.add_child(pod)
 	p.lock_label = Label3D.new()
 	p.lock_label.visible = false
 	p.node.add_child(p.lock_label)
 	plots.append(p)
 	for cell in _cells_for(gx, gz, cls):
 		occupied_cells[cell] = true
+	_clear_ruins_near(c, p.size)
 	return p
 
 
@@ -1049,166 +1367,433 @@ func _get_land_value(gx: int, gz: int) -> float:
 	return float(land_value.get(Vector2i(gx, gz), 0.0))
 
 
+func _lvl_mult(b: Building) -> float:
+	return 1.0 + 0.4 * float(b.lvl - 1)
+
+
+# Recomputed from scratch every day: the sum of what each source radiates (no build-up).
 func _update_land_value() -> void:
-	# Decay all cells toward 0
-	var keys_to_erase: Array = []
-	for k in land_value:
-		land_value[k] = float(land_value[k]) - 1.2
-		if float(land_value[k]) <= 0.0:
-			keys_to_erase.append(k)
-	for k in keys_to_erase:
-		land_value.erase(k)
-	# Radiate from completed buildings
+	land_value.clear()
+	var srcs: Array = [["Camp", Vector2(camp_pos.x, camp_pos.z), 1.0]]
 	for b in buildings:
-		if not b.done:
-			continue
-		if not LAND_VALUE_SOURCES.has(b.type):
-			continue
-		var src: Dictionary = LAND_VALUE_SOURCES[b.type]
-		var radius: int = int(src["radius"])
-		var delta: float = float(src["delta"])
-		var pp: Plot = plots[b.plot]
-		for dx in range(-radius, radius + 1):
-			for dz in range(-radius, radius + 1):
-				var dist := sqrt(float(dx * dx + dz * dz))
-				if dist > float(radius) + 0.5:
-					continue
+		if b.done and LAND_VALUE_SOURCES.has(b.type):
+			var positive := float(LAND_VALUE_SOURCES[b.type]["delta"]) > 0.0
+			if positive and not b.active:
+				continue
+			srcs.append([b.type, Vector2(b.pos.x, b.pos.z), _lvl_mult(b) if positive else 1.0])
+	for s in srcs:
+		var d: Dictionary = LAND_VALUE_SOURCES[s[0]]
+		var radius := int(d["radius"])
+		var delta := float(d["delta"]) * float(s[2])
+		var sp: Vector2 = s[1]
+		var cc := _world_to_grid(sp.x, sp.y)
+		for dx in range(-radius - 1, radius + 2):
+			for dz in range(-radius - 1, radius + 2):
+				var cell := cc + Vector2i(dx, dz)
+				var dist := _cell_world(cell).distance_to(sp) / PLACE_CELL
 				var falloff := 1.0 - dist / (float(radius) + 1.0)
-				var cell := Vector2i(pp.gx + dx, pp.gz + dz)
-				land_value[cell] = clampf(float(land_value.get(cell, 0.0)) + delta * falloff, 0.0, 100.0)
+				if falloff <= 0.0:
+					continue
+				land_value[cell] = float(land_value.get(cell, 0.0)) + delta * falloff
+	var road_bonus := {}
+	for k in roads:
+		var rc := _road_center(k)
+		var cell := _world_to_grid(rc.x, rc.y)
+		road_bonus[cell] = maxf(float(road_bonus.get(cell, 0.0)), 6.0 if int(roads[k]) == ROAD_PAVED else 3.0)
+	for cell in road_bonus:
+		land_value[cell] = float(land_value.get(cell, 0.0)) + float(road_bonus[cell])
+	for cell in land_value.keys():
+		land_value[cell] = clampf(float(land_value[cell]), 0.0, 100.0)
 	if lv_overlay:
 		_refresh_lv_overlay()
 
 
+func _housing_of(b: Building) -> int:
+	var base := int(BUILDINGS[b.type]["housing"])
+	if base <= 0 or not b.done:
+		return 0
+	var h := float(base) * (1.0 + 0.5 * float(b.lvl - 1))
+	if b.zone_bonus:
+		h *= 1.0 + ZONE_BONUS
+	return int(round(h))
+
+
+func _housing_points() -> Array:
+	var pts: Array = [[Vector2(camp_pos.x, camp_pos.z), BASE_HOUSING]]
+	for b in buildings:
+		var h := _housing_of(b)
+		if h > 0:
+			pts.append([Vector2(b.pos.x, b.pos.z), h])
+	return pts
+
+
+func _coverage_radius(b: Building) -> float:
+	return float(SERVICE_COVERAGE[b.type]["radius"]) * (1.0 + 0.2 * float(b.lvl - 1))
+
+
+# Share of all housing (people's homes) inside a service building's radius.
+func _coverage_share(b: Building, pts: Array, total: float) -> float:
+	var rad := _coverage_radius(b)
+	var covered := 0.0
+	var bp := Vector2(b.pos.x, b.pos.z)
+	for pt in pts:
+		if (pt[0] as Vector2).distance_to(bp) <= rad:
+			covered += float(pt[1])
+	return covered / maxf(1.0, total)
+
+
 func _apply_service_coverage() -> void:
-	service_xp_mult  = 1.0
+	service_xp_mult = 1.0
 	service_heal_mult = 1.0
+	coverage_morale = 0.0
 	if survivors.is_empty():
 		return
-	var morale_add := 0.0
+	var pts := _housing_points()
+	var total := 0.0
+	for pt in pts:
+		total += float(pt[1])
 	var discont_add := 0.0
 	var xp_add := 0.0
 	var heal_add := 0.0
-	var n := float(survivors.size())
 	for b in buildings:
-		if not b.done or not SERVICE_COVERAGE.has(b.type):
+		if not b.done or not b.active or not SERVICE_COVERAGE.has(b.type):
 			continue
 		var cov: Dictionary = SERVICE_COVERAGE[b.type]
-		var rad: float = float(cov["radius"])
-		var pp: Plot = plots[b.plot]
-		var count_in_range := 0
-		for v in survivors:
-			var d := Vector2(v.node.position.x - pp.pos.x, v.node.position.z - pp.pos.z).length()
-			if d <= rad:
-				count_in_range += 1
-		if count_in_range == 0:
-			continue
-		var coverage_ratio := float(count_in_range) / n
-		if cov.has("morale"):
-			morale_add += float(cov["morale"]) * coverage_ratio
-		if cov.has("discontent"):
-			discont_add += float(cov["discontent"]) * coverage_ratio
-		if cov.has("heal_bonus"):
-			heal_add += float(cov["heal_bonus"]) * coverage_ratio
-		if cov.has("xp_bonus"):
-			xp_add += float(cov["xp_bonus"]) * coverage_ratio
-	morale = clampf(morale + morale_add, 0.0, 100.0)
+		var share := _coverage_share(b, pts, total) * _lvl_mult(b)
+		coverage_morale += float(cov.get("morale", 0.0)) * share
+		discont_add += float(cov.get("discontent", 0.0)) * share
+		heal_add += float(cov.get("heal_bonus", 0.0)) * share
+		xp_add += float(cov.get("xp_bonus", 0.0)) * share
+	coverage_morale = minf(coverage_morale, 4.0)
+	morale = clampf(morale + coverage_morale, 0.0, 100.0)
 	discontent = clampf(discontent + discont_add, 0.0, 100.0)
-	if heal_add > 0.0:
-		service_heal_mult = 1.0 + heal_add
-	if xp_add > 0.0:
-		service_xp_mult = 1.0 + xp_add
+	service_heal_mult = 1.0 + minf(heal_add, 1.5)
+	service_xp_mult = 1.0 + minf(xp_add, 2.0)
 
 
 func _update_demand() -> void:
 	var n := float(survivors.size())
 	if n == 0.0:
-		demand_housing = 0.0; demand_production = 0.0; demand_services = 0.0
+		demand_housing = 0.0
+		demand_production = 0.0
+		demand_services = 0.0
 		return
-	# Housing: unsatisfied population fraction
 	var cap := float(_housing_capacity())
-	var unsatisfied := maxf(0.0, n - cap * 0.85)
-	demand_housing = clampf(unsatisfied / n * 100.0 + (30.0 if cap < n * 1.2 else 0.0), 0.0, 100.0)
-	# Production: resources below safety thresholds
+	demand_housing = clampf((n + 3.0 - cap) / maxf(3.0, n * 0.4) * 100.0, 0.0, 100.0)
 	var shortage_score := 0.0
-	if float(resources.get("Food",  0.0)) < n * FOOD_PER_VILLAGER  * 4.0: shortage_score += 35.0
-	if float(resources.get("Water", 0.0)) < n * WATER_PER_VILLAGER * 4.0: shortage_score += 35.0
-	if float(resources.get("Wood",  0.0)) < 25.0: shortage_score += 15.0
-	if float(resources.get("Stone", 0.0)) < 25.0: shortage_score += 15.0
+	var cons := _compute_consumption()
+	for r in ["Food", "Water"]:
+		var use := maxf(0.1, float(cons.get(r, 0.0)))
+		var days_left := float(resources.get(r, 0.0)) / use
+		if days_left < 5.0:
+			shortage_score += 35.0 * (1.0 - days_left / 5.0)
+	for r in ["Wood", "Stone"]:
+		if float(resources.get(r, 0.0)) < 25.0:
+			shortage_score += 15.0
 	demand_production = clampf(shortage_score, 0.0, 100.0)
-	# Services: population vs service buildings coverage
-	var svc_count := 0
+	var pts := _housing_points()
+	var total := 0.0
+	for pt in pts:
+		total += float(pt[1])
+	var best := 0.0
 	for b in buildings:
-		if b.done and SERVICE_COVERAGE.has(b.type):
-			svc_count += 1
-	var ideal := maxf(1.0, n / 7.0)
-	demand_services = clampf((1.0 - float(svc_count) / ideal) * 100.0, 0.0, 100.0)
+		if b.done and b.active and SERVICE_COVERAGE.has(b.type):
+			best += _coverage_share(b, pts, total)
+	var ideal := 1.0 + n / 12.0
+	demand_services = clampf((1.0 - best / ideal) * 100.0, 0.0, 100.0)
+
+
+# ---------------------------------------------------------------- overlays (land value, zones, rings)
+
+func _overlay_mm(parent_old: Node3D, items: Array) -> Node3D:
+	# items: [Vector2 world xz, Color]
+	if is_instance_valid(parent_old):
+		parent_old.queue_free()
+	var root := Node3D.new()
+	terrain_root.add_child(root)
+	if items.is_empty():
+		return root
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(PLACE_CELL * 0.9, 1.0, PLACE_CELL * 0.9)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	mm.instance_count = items.size()
+	for i in range(items.size()):
+		var p: Vector2 = items[i][0]
+		var fr := _footing_range(p.x, p.y)
+		mm.set_instance_transform(i, Transform3D(Basis(), Vector3(p.x, fr.y + 4.5, p.y)))
+		mm.set_instance_color(i, items[i][1])
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(mi)
+	return root
+
+
+func _territory_cells() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var r := int(ceil(_territory_radius() / PLACE_CELL)) + 1
+	for gx in range(-r, r + 1):
+		for gz in range(-r, r + 1):
+			var cw := _cell_world(Vector2i(gx, gz))
+			if Vector2(cw.x - camp_pos.x, cw.y - camp_pos.z).length() <= _territory_radius() and _is_land_world(cw.x, cw.y):
+				out.append(Vector2i(gx, gz))
+	return out
 
 
 func _toggle_lv_overlay() -> void:
 	lv_overlay = not lv_overlay
 	if lv_overlay:
 		_refresh_lv_overlay()
-		_toast("طبقة قيمة الأرض مفعّلة — أخضر = قيمة عالية، أحمر = منخفضة.", 4.0)
+		_toast("قيمة الأرض: أخضر = مرغوبة للسكن، أحمر = ضجيج ومنخفضة.", 4.0)
 	else:
 		if is_instance_valid(lv_overlay_root):
 			lv_overlay_root.queue_free()
-			lv_overlay_root = null
-		_toast("أُخفيت طبقة قيمة الأرض.", 2.5)
+		lv_overlay_root = null
+	_refresh_plan_buttons()
 
 
 func _refresh_lv_overlay() -> void:
-	if is_instance_valid(lv_overlay_root):
-		lv_overlay_root.queue_free()
-	lv_overlay_root = Node3D.new()
-	terrain_root.add_child(lv_overlay_root)
-	var max_r := int(ceil(PLAY_RADIUS / PLACE_CELL)) + 1
-	for gx in range(-max_r, max_r + 1):
-		for gz in range(-max_r, max_r + 1):
-			if Vector2(float(gx) * PLACE_CELL, float(gz) * PLACE_CELL).length() > PLAY_RADIUS + PLACE_CELL:
-				continue
-			var lv := float(land_value.get(Vector2i(gx, gz), 0.0))
-			if lv < 2.0:
-				continue
-			var tile := MeshInstance3D.new()
-			var bm := BoxMesh.new()
-			bm.size = Vector3(PLACE_CELL * 0.85, 0.8, PLACE_CELL * 0.85)
-			tile.mesh = bm
-			tile.position = Vector3(camp_pos.x + float(gx) * PLACE_CELL, plateau_h + 1.8, camp_pos.z + float(gz) * PLACE_CELL)
-			var t := lv / 100.0
-			tile.material_override = _mat_alpha(Color(1.0 - t, 0.2 + t * 0.8, 0.1, 0.42))
-			lv_overlay_root.add_child(tile)
+	var items: Array = []
+	var seen := {}
+	for cell in _territory_cells():
+		seen[cell] = true
+	for cell in land_value:
+		seen[cell] = true
+	for cell in seen:
+		var raw := float(land_value.get(cell, 0.0))
+		var t := clampf(raw / 60.0, 0.0, 1.0)
+		var col := Color(0.9, 0.25, 0.2, 0.42).lerp(Color(0.25, 0.85, 0.3, 0.5), t)
+		if raw <= 0.5:
+			col = Color(0.85, 0.3, 0.25, 0.22)
+		items.append([_cell_world(cell), col])
+	lv_overlay_root = _overlay_mm(lv_overlay_root, items)
 
 
-func _toggle_road_mode() -> void:
-	road_mode = not road_mode
-	if road_mode:
-		_hide_sheets()
-		_toast("وضع رسم المسارات — المس أو اسحب على الأرض لرسم طريق ترابي.", 4.0)
-	else:
-		_toast("خرجت من وضع رسم المسارات.", 2.5)
+func _refresh_zone_overlay() -> void:
+	var show := plan_mode.begins_with("zone")
+	if not show:
+		if is_instance_valid(zone_overlay_root):
+			zone_overlay_root.queue_free()
+		zone_overlay_root = null
+		return
+	var items: Array = []
+	for cell in zones:
+		items.append([_cell_world(cell), ZONE_COLORS[int(zones[cell])]])
+	zone_overlay_root = _overlay_mm(zone_overlay_root, items)
 
 
-func _paint_trail_at(screen_pos: Vector2) -> void:
+func _make_ring(center: Vector3, radius: float, color: Color, posts: int = 72) -> MultiMeshInstance3D:
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(10, 7, 10)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = posts
+	for i in range(posts):
+		var a := TAU * float(i) / float(posts)
+		var x := center.x + cos(a) * radius
+		var z := center.z + sin(a) * radius
+		mm.set_instance_transform(i, Transform3D(Basis(), Vector3(x, _height_at_world(x, z) + 4.0, z)))
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	mi.material_override = _unlit_mat(color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	terrain_root.add_child(mi)
+	return mi
+
+
+func _show_territory(on: bool) -> void:
+	if is_instance_valid(territory_ring):
+		territory_ring.queue_free()
+		territory_ring = null
+	if on:
+		territory_ring = _make_ring(camp_pos, _territory_radius(), Color(1.0, 0.92, 0.55, 0.85), 96)
+
+
+func _show_coverage_ring(b: Building) -> void:
+	if is_instance_valid(coverage_ring):
+		coverage_ring.queue_free()
+	coverage_ring = null
+	if b == null or not SERVICE_COVERAGE.has(b.type):
+		return
+	coverage_ring = _make_ring(b.pos, _coverage_radius(b), Color(0.45, 0.85, 1.0, 0.9), 60)
+
+
+# ---------------------------------------------------------------- roads & zones (planning)
+
+func _build_roads() -> void:
+	for t in [ROAD_DIRT, ROAD_PAVED]:
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(TRAIL_CELL + 4.0, 1.2 if t == ROAD_DIRT else 1.8, TRAIL_CELL + 4.0)
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = ROAD_MAX
+		mm.visible_instance_count = 0
+		var node := MultiMeshInstance3D.new()
+		node.multimesh = mm
+		node.material_override = _mat(Color("#86704c")) if t == ROAD_DIRT else _stone_mat(Color("#d6cbb0"))
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		terrain_root.add_child(node)
+		road_mm[t] = mm
+
+
+func _road_transform(k: Vector2i, t: int) -> Transform3D:
+	var c := _road_center(k)
+	var fr := _footing_range(c.x, c.y)
+	return Transform3D(Basis(), Vector3(c.x, (fr.x + fr.y) * 0.5 + (0.7 if t == ROAD_DIRT else 1.1), c.y))
+
+
+func _rebuild_road_meshes() -> void:
+	for t in [ROAD_DIRT, ROAD_PAVED]:
+		var mm: MultiMesh = road_mm[t]
+		var i := 0
+		for k in roads:
+			if int(roads[k]) == t and i < ROAD_MAX:
+				mm.set_instance_transform(i, _road_transform(k, t))
+				i += 1
+		mm.visible_instance_count = i
+
+
+func _road_type_at(x: float, z: float) -> int:
+	return int(roads.get(Vector2i(int(floor(x / TRAIL_CELL)), int(floor(z / TRAIL_CELL))), 0))
+
+
+func _speed_at(flat: Vector3) -> float:
+	var key := Vector2i(int(floor(flat.x / TRAIL_CELL)), int(floor(flat.z / TRAIL_CELL)))
+	var rt := int(roads.get(key, 0))
+	if rt > 0:
+		return float(ROAD_SPEED[rt])
+	if float(trail_counts.get(key, 0.0)) < 0.0:
+		return TRAIL_SPEED
+	return 1.0
+
+
+func _set_plan_mode(mode: String) -> void:
+	plan_mode = "" if plan_mode == mode else mode
+	if plan_mode == "road_paved" and level < 3:
+		plan_mode = ""
+		_toast("الطرق المرصوفة تُفتح في المستوى 3.")
+	_show_territory(plan_mode != "")
+	_refresh_zone_overlay()
+	_refresh_plan_buttons()
+	match plan_mode:
+		"road_dirt":
+			_toast("اسحب إصبعك على الأرض لرسم طريق ترابي مجاني (+45% سرعة مشي). الطرق تمدّ حدود البناء.", 5.0)
+		"road_paved":
+			_toast("طريق مرصوف: %d حجر لكل قطعة، سرعة +90%% وقيمة أرض أعلى." % int(PAVED_COST), 5.0)
+		"road_erase":
+			_toast("اسحب على الطرق لإزالتها.", 3.0)
+		"zone_erase":
+			_toast("اسحب لمسح تقسيم المناطق.", 3.0)
+		"":
+			pass
+		_:
+			if plan_mode.begins_with("zone_"):
+				var z := int(plan_mode.substr(5))
+				_toast("اسحب لتحديد منطقة %s. المباني المطابقة فيها تحصل على +20%%." % ZONE_AR[z], 5.0)
+
+
+var _plan_toast_time := 0
+
+
+func _plan_toast(msg: String) -> void:
+	var now := Time.get_ticks_msec()
+	if now - _plan_toast_time > 2500:
+		_plan_toast_time = now
+		_toast(msg, 3.0)
+
+
+func _paint_at(screen_pos: Vector2) -> void:
 	var hit: Variant = _ray_to_terrain(screen_pos)
 	if hit == null:
 		return
 	var wp: Vector3 = hit
+	if plan_mode.begins_with("road"):
+		_paint_road(wp)
+	elif plan_mode.begins_with("zone"):
+		_paint_zone(wp)
+
+
+func _paint_road(wp: Vector3) -> void:
 	var key := Vector2i(int(floor(wp.x / TRAIL_CELL)), int(floor(wp.z / TRAIL_CELL)))
-	if trail_counts.get(key, 0.0) == -1.0:
+	var c := _road_center(key)
+	if plan_mode == "road_erase":
+		if roads.has(key):
+			roads.erase(key)
+			_rebuild_road_meshes()
 		return
-	if trail_used >= TRAIL_MAX:
-		_toast("امتلأ الحد الأقصى لعدد المسارات.", 3.0)
+	if not _is_land_world(c.x, c.y):
 		return
-	var cx := (float(key.x) + 0.5) * TRAIL_CELL
-	var cz := (float(key.y) + 0.5) * TRAIL_CELL
-	var fr := _footing_range(cx, cz)
-	trail_mm.set_instance_transform(trail_used, Transform3D(Basis(), Vector3(cx, (fr.x + fr.y) * 0.5 + 0.35, cz)))
-	trail_used += 1
-	trail_mm.visible_instance_count = trail_used
+	var cur := int(roads.get(key, 0))
+	var want := ROAD_PAVED if plan_mode == "road_paved" else ROAD_DIRT
+	if cur >= want:
+		return
+	var p := _plot_at_point(Vector3(c.x, 0.0, c.y), -6.0)
+	if p != null:
+		return
+	var from_camp := Vector2(c.x - camp_pos.x, c.y - camp_pos.z).length()
+	var allowed := from_camp <= _territory_radius() + 60.0 or _near_road(c.x, c.y, TRAIL_CELL * 1.6)
+	if not allowed:
+		_plan_toast("ابدأ الطريق من داخل المستوطنة أو امدده من طريق قائم.")
+		return
+	if roads.size() >= ROAD_MAX:
+		_plan_toast("بلغت الحد الأقصى للطرق.")
+		return
+	if want == ROAD_PAVED:
+		if float(resources["Stone"]) < PAVED_COST:
+			_plan_toast("لا يوجد حجر كافٍ لرصف الطريق.")
+			return
+		resources["Stone"] = float(resources["Stone"]) - PAVED_COST
+	roads[key] = want
 	trail_counts[key] = -1.0
+	if cur == 0 and want == ROAD_DIRT:
+		var mm: MultiMesh = road_mm[ROAD_DIRT]
+		var i := mm.visible_instance_count
+		if i < ROAD_MAX:
+			mm.set_instance_transform(i, _road_transform(key, ROAD_DIRT))
+			mm.visible_instance_count = i + 1
+	else:
+		_rebuild_road_meshes()
+	_check_goals()
 
 
+func _paint_zone(wp: Vector3) -> void:
+	var cell := _world_to_grid(wp.x, wp.z)
+	var cw := _cell_world(cell)
+	if plan_mode == "zone_erase":
+		if zones.has(cell):
+			zones.erase(cell)
+			_refresh_zone_bonus()
+			_refresh_zone_overlay()
+		return
+	if not _in_territory(cw.x, cw.y) or not _is_land_world(cw.x, cw.y):
+		_plan_toast("المناطق تُحدَّد داخل حدود المستوطنة فقط.")
+		return
+	var z := int(plan_mode.substr(5))
+	if int(zones.get(cell, 0)) == z:
+		return
+	zones[cell] = z
+	_refresh_zone_bonus()
+	_refresh_zone_overlay()
+	_check_goals()
+
+
+func _refresh_zone_bonus() -> void:
+	for b in buildings:
+		var p: Plot = plots[b.plot]
+		b.zone_bonus = _zone_matches(p.gx, p.gz, p.cls, str(BUILDINGS[b.type].get("cat", "any")))
+		for s in sources:
+			if s.building == b:
+				_apply_source_stats(s, b)
 func _note_step(flat: Vector3, dt: float) -> void:
 	if trail_used >= TRAIL_MAX:
 		return
@@ -1281,23 +1866,7 @@ func _generate_sources() -> void:
 			placed += 1
 
 
-func _add_building_source(b: Building) -> void:
-	var def: Dictionary = BUILDINGS[b.type]
-	var g: Dictionary = def["gather"]
-	if g.is_empty():
-		return
-	var p: Plot = plots[b.plot]
-	var s := Source.new()
-	s.res = str(g["res"])
-	s.label = str(def["ar"])
-	s.pos = b.pos + Vector3(0, 0, p.size.y * 0.5 + 10.0)
-	s.pos.y = _height_at_world(s.pos.x, s.pos.z)
-	s.infinite = true
-	s.yield_amt = float(g["yield"])
-	s.gather_time = float(g["time"])
-	s.slots = int(g["slots"])
-	s.building = b
-	sources.append(s)
+
 
 
 # ---------------------------------------------------------------- building models
@@ -1625,6 +2194,62 @@ func _make_building_model(type: String) -> Node3D:
 			# Scroll/book shelves hint on side
 			for row_l in range(3):
 				_box(m, Vector3(3, 8, 32), Vector3(-24, float(row_l) * 9 + 5, 0), Color("#8a6a40"))
+		"Woodcutter":
+			_box(m, Vector3(30, 16, 24), Vector3(0, 8, -6), wood)
+			var wroof := _prism(m, Vector3(36, 12, 30), Vector3(0, 22, -6), Color("#6b4f33"))
+			wroof.rotation_degrees.y = 90.0
+			_arch(m, 0, 0, 8, 12, 6.2, door)
+			for lg in range(4):
+				var log := _cyl(m, 2.6, 2.6, 22.0, Vector3(-8.0 + float(lg % 2) * 5.0, 2.6 + float(lg / 2) * 5.0, 14.0), Color("#8a6a40"))
+				log.rotation_degrees.z = 90.0
+			_cyl(m, 3.5, 3.5, 4.0, Vector3(14, 2, 12), Color("#7a5a35"))
+			for tp2 in [Vector3(-16, 0, 14), Vector3(17, 0, -14)]:
+				_cyl(m, 1.4, 1.8, 12.0, tp2 + Vector3(0, 6, 0), Color("#6b553c"))
+				_cyl(m, 0.0, 8.0, 18.0, tp2 + Vector3(0, 20, 0), Color("#4f6b3a"))
+		"Market":
+			# Covered souq hall with an arcade, a small dome and striped stalls in front
+			_box(m, Vector3(56, 18, 28), Vector3(0, 9, -8), Color.WHITE, true)
+			_box(m, Vector3(60, 2.5, 32), Vector3(0, 19.2, -8), cream, true)
+			_parapet(m, 60.0, 32.0, 20.5, 3.0)
+			_dome(m, 9.0, Vector3(0, 21, -8))
+			for ax in [-21.0, -7.0, 7.0, 21.0]:
+				_arch(m, ax, 0, 10, 14, 6.5, door)
+			var awn_cols := [Color("#b8402e"), Color("#2f7a3a"), Color("#d89a2a")]
+			for si in range(3):
+				var sx := -19.0 + 19.0 * float(si)
+				_box(m, Vector3(13, 6, 8), Vector3(sx, 3, 17), wood)
+				var aw := _box(m, Vector3(15, 1.2, 11), Vector3(sx, 13.5, 17), awn_cols[si])
+				aw.rotation_degrees.x = -12.0
+				_cyl(m, 0.8, 0.8, 13.0, Vector3(sx - 6.5, 6.5, 21.5), wood)
+				_cyl(m, 0.8, 0.8, 13.0, Vector3(sx + 6.5, 6.5, 21.5), wood)
+				for gi in range(3):
+					_sphere(m, 2.2, Vector3(sx - 4.0 + 4.0 * float(gi), 7.2, 17.0), [Color("#e0ac4a"), Color("#8fb04a"), Color("#c8b84a")][gi])
+		"Barracks":
+			# Fortified hall with crenellations, a training yard, spear rack and banner
+			_box(m, Vector3(52, 22, 28), Vector3(0, 11, -8), Color.WHITE, true)
+			_box(m, Vector3(56, 3, 32), Vector3(0, 23.5, -8), cream, true)
+			for k in range(7):
+				_box(m, Vector3(5, 5, 4), Vector3(-24.0 + 8.0 * float(k), 27.5, 7.0), Color.WHITE, true)
+				_box(m, Vector3(5, 5, 4), Vector3(-24.0 + 8.0 * float(k), 27.5, -23.0), Color.WHITE, true)
+			_arch(m, 0, 0, 14, 18, 6.5, door)
+			_arch(m, -17, 9, 6, 9, 6.5, window)
+			_arch(m, 17, 9, 6, 9, 6.5, window)
+			_box(m, Vector3(54, 1, 16), Vector3(0, 0.6, 16), Color("#b8a070"))
+			for k2 in range(4):
+				var sp := _cyl(m, 0.7, 0.7, 22.0, Vector3(-22.0 + float(k2) * 3.0, 11.0, 20.0), wood)
+				sp.rotation_degrees.z = 8.0
+				_cyl(m, 0.0, 1.4, 4.0, Vector3(-20.5 + float(k2) * 3.0, 23.0, 20.0), Color("#9aa0a6"))
+			_cyl(m, 1.2, 1.2, 14.0, Vector3(16, 7, 17), wood)
+			_sphere(m, 4.0, Vector3(16, 16, 17), Color("#c8b48c"))
+			_cyl(m, 1.0, 1.0, 34.0, Vector3(24, 34, -20), wood)
+			_box(m, Vector3(13, 8, 1.2), Vector3(30.5, 46, -20), Color("#2f6f3a"))
+		"Wall":
+			_box(m, Vector3(78, 26, 12), Vector3(0, 13, 0), Color.WHITE, true)
+			for k in range(7):
+				_box(m, Vector3(7, 6, 13), Vector3(-33.0 + 11.0 * float(k), 29, 0), Color.WHITE, true)
+			_box(m, Vector3(14, 34, 17), Vector3(-34, 17, 0), cream, true)
+			_box(m, Vector3(14, 34, 17), Vector3(34, 17, 0), cream, true)
+			_arch(m, 0, 2, 4, 8, 6.2, window)
 	return m
 
 
@@ -1668,6 +2293,7 @@ func _load_settings() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(SETTINGS_PATH) == OK:
 		text_size_index = clampi(int(cf.get_value("ui", "text_size", 1)), 0, TEXT_SIZES.size() - 1)
+		shadows_on = bool(cf.get_value("gfx", "shadows", true))
 	_apply_text_size()
 
 
@@ -1675,12 +2301,25 @@ func _apply_text_size() -> void:
 	get_tree().root.content_scale_factor = float(TEXT_SIZES[text_size_index])
 
 
+func _save_settings() -> void:
+	var cf := ConfigFile.new()
+	cf.set_value("ui", "text_size", text_size_index)
+	cf.set_value("gfx", "shadows", shadows_on)
+	cf.save(SETTINGS_PATH)
+
+
+func _toggle_shadows() -> void:
+	shadows_on = not shadows_on
+	if is_instance_valid(sun_node):
+		sun_node.shadow_enabled = shadows_on
+	shadow_btn.text = "الظلال: %s" % ("تعمل" if shadows_on else "مطفأة")
+	_save_settings()
+
+
 func _cycle_text_size() -> void:
 	text_size_index = (text_size_index + 1) % TEXT_SIZES.size()
 	_apply_text_size()
-	var cf := ConfigFile.new()
-	cf.set_value("ui", "text_size", text_size_index)
-	cf.save(SETTINGS_PATH)
+	_save_settings()
 	text_size_btn.text = "حجم الخط: %s" % TEXT_SIZE_AR[text_size_index]
 
 
@@ -1719,7 +2358,7 @@ func _panel_style() -> StyleBoxFlat:
 
 func _make_theme() -> Theme:
 	var t := Theme.new()
-	t.default_font = ar_font
+	t.default_font = ui_font
 	t.default_font_size = 22
 	t.set_stylebox("normal", "Button", _btn_style(C_BTN))
 	t.set_stylebox("hover", "Button", _btn_style(C_BTN.lightened(0.1)))
@@ -1755,8 +2394,14 @@ func _button(text: String, cb: Callable, min_size: Vector2 = Vector2(0, 60), fsi
 		b.add_theme_stylebox_override("normal", _btn_style(color))
 		b.add_theme_stylebox_override("hover", _btn_style(color.lightened(0.1)))
 		b.add_theme_stylebox_override("pressed", _btn_style(color.darkened(0.1), true))
-	b.pressed.connect(cb)
+	b.pressed.connect(_guarded.bind(cb))
 	return b
+
+
+func _guarded(cb: Callable) -> void:
+	if scroll_dragged:
+		return
+	cb.call()
 
 
 func _icon_button(kind: String, cb: Callable, size: float = 52.0) -> Button:
@@ -1773,7 +2418,7 @@ func _icon_button(kind: String, cb: Callable, size: float = 52.0) -> Button:
 
 func _dock_button(kind: String, text: String, cb: Callable) -> Button:
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(132, 82)
+	b.custom_minimum_size = Vector2(116, 80)
 	b.pressed.connect(cb)
 	var vb := VBoxContainer.new()
 	vb.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1837,6 +2482,9 @@ func _build_ui() -> void:
 	_build_build_sheet()
 	_build_log_sheet()
 	_build_villages_sheet()
+	_build_army_sheet()
+	_build_economy_sheet()
+	_build_plan_sheet()
 	_build_dock()
 	_build_place_bar()
 	_build_inspect_bar()
@@ -2019,7 +2667,7 @@ func _build_workers_sheet() -> void:
 func _job_row(res: String) -> Control:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 4)
-	col.custom_minimum_size = Vector2(140, 0)
+	col.custom_minimum_size = Vector2(122, 0)
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override("separation", 6)
 	col.add_child(top)
@@ -2055,7 +2703,13 @@ func _build_missions_sheet() -> void:
 	box.custom_minimum_size = Vector2(520, 0)
 	box.add_theme_constant_override("separation", 6)
 	missions_sheet.add_child(box)
-	box.add_child(_label("المهام", 28, C_GOLD))
+	var mh := HBoxContainer.new()
+	mh.add_theme_constant_override("separation", 16)
+	box.add_child(mh)
+	var mt := _label_b("المهام", 28, C_GOLD)
+	mt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mh.add_child(mt)
+	mh.add_child(_button("سجل الأحداث", _toggle_sheet.bind("log"), Vector2(170, 50), 18))
 	missions_list = VBoxContainer.new()
 	missions_list.add_theme_constant_override("separation", 6)
 	box.add_child(missions_list)
@@ -2083,9 +2737,11 @@ func _build_build_sheet() -> void:
 	build_scroll = ScrollContainer.new()
 	build_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	build_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	build_scroll.custom_minimum_size = Vector2(0, 172)
+	build_scroll.custom_minimum_size = Vector2(0, 196)
 	build_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	build_scroll.follow_focus = false
+	build_scroll.scroll_deadzone = 100000
+	scroll_targets.append(build_scroll)
 	box.add_child(build_scroll)
 	cards_box = HBoxContainer.new()
 	cards_box.add_theme_constant_override("separation", 10)
@@ -2093,22 +2749,7 @@ func _build_build_sheet() -> void:
 	build_scroll.add_child(cards_box)
 
 
-func _build_dock() -> void:
-	dock = _anchored_panel(Control.PRESET_CENTER_BOTTOM)
-	dock.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	dock.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	dock.offset_bottom = -12
-	dock.add_theme_stylebox_override("panel", _style(Color(0.09, 0.105, 0.075, 0.88), 26, C_BORDER, 2, 10))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	dock.add_child(row)
-	row.add_child(_dock_button("build", "بناء", _toggle_sheet.bind("build")))
-	row.add_child(_dock_button("workers", "العمال", _toggle_sheet.bind("workers")))
-	row.add_child(_dock_button("missions2", "المهام", _toggle_sheet.bind("missions")))
-	row.add_child(_dock_button("villages", "القرى", _toggle_sheet.bind("villages")))
-	row.add_child(_dock_button("log", "السجل", _toggle_sheet.bind("log")))
-	row.add_child(_dock_button("road", "مسارات", _toggle_road_mode))
-	row.add_child(_dock_button("lv", "القيمة", _toggle_lv_overlay))
+
 
 
 func _build_place_bar() -> void:
@@ -2129,28 +2770,7 @@ func _build_place_bar() -> void:
 	row.add_child(_button("إلغاء", _cancel_placement, Vector2(130, 70), 24, C_RED))
 
 
-func _build_inspect_bar() -> void:
-	inspect_bar = _sheet(Control.PRESET_CENTER_BOTTOM)
-	inspect_bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	inspect_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	inspect_bar.offset_bottom = -12
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 14)
-	inspect_bar.add_child(row)
-	inspect_label = _label("", 19)
-	inspect_label.custom_minimum_size = Vector2(380, 0)
-	inspect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	inspect_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(inspect_label)
-	upgrade_btn = _button("ترقية", _upgrade_pressed, Vector2(160, 66), 19, Color("#4a7a9a"))
-	upgrade_btn.visible = false
-	row.add_child(upgrade_btn)
-	council_btn = _button("إدارة الديوان", _show_council_panel, Vector2(190, 66), 18, Color("#8a6020"))
-	council_btn.visible = false
-	row.add_child(council_btn)
-	demolish_btn = _button("هدم", _demolish_pressed, Vector2(170, 66), 21, C_RED)
-	row.add_child(demolish_btn)
-	row.add_child(_button("إغلاق", _close_inspect, Vector2(120, 66), 21))
+
 
 
 func _build_pause_banner() -> void:
@@ -2205,7 +2825,8 @@ func _build_menu() -> void:
 	var m := _modal()
 	menu_layer = m[0]
 	var vb: VBoxContainer = m[1]
-	var title := _label("الزيتون والحجر", 34, C_GOLD)
+	var title := _label("الزيتون والحجر", 40, C_GOLD)
+	title.add_theme_font_override("font", title_font)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 	var sub := _label("حكاية من فلسطين  —  الإصدار %s" % VERSION, 16, C_MUTED)
@@ -2217,6 +2838,8 @@ func _build_menu() -> void:
 	vb.add_child(_button("تحميل الحفظ التلقائي", _load_game.bind(AUTOSAVE_PATH), Vector2(0, 54), 22))
 	text_size_btn = _button("حجم الخط: %s" % TEXT_SIZE_AR[text_size_index], _cycle_text_size, Vector2(0, 54), 22)
 	vb.add_child(text_size_btn)
+	shadow_btn = _button("الظلال: %s" % ("تعمل" if shadows_on else "مطفأة"), _toggle_shadows, Vector2(0, 54), 22)
+	vb.add_child(shadow_btn)
 	new_btn = _button("مخيم جديد", _new_pressed, Vector2(0, 54), 22, Color("#6b4a2e"))
 	vb.add_child(new_btn)
 
@@ -2279,7 +2902,8 @@ func _build_start_screen() -> void:
 	logo_col.add_child(olive_row)
 	var olive_lbl := _label("🫒", 44)
 	olive_row.add_child(olive_lbl)
-	var title := _label("الزيتون والحجر", 48, C_GOLD)
+	var title := _label("الزيتون والحجر", 56, C_GOLD)
+	title.add_theme_font_override("font", title_font)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_constant_override("outline_size", 3)
 	title.add_theme_color_override("font_outline_color", Color("#6a4e14"))
@@ -2328,39 +2952,10 @@ func _ss_new() -> void:
 
 # ---------------------------------------------------------------- UI actions
 
-func _hide_sheets() -> void:
-	build_sheet.visible = false
-	workers_sheet.visible = false
-	missions_sheet.visible = false
-	if is_instance_valid(log_sheet):
-		log_sheet.visible = false
-	if is_instance_valid(villages_sheet):
-		villages_sheet.visible = false
 
 
-func _toggle_sheet(which: String) -> void:
-	var target: PanelContainer = build_sheet
-	if which == "workers":
-		target = workers_sheet
-	elif which == "missions":
-		target = missions_sheet
-	elif which == "log":
-		target = log_sheet
-	elif which == "villages":
-		target = villages_sheet
-	var show := not target.visible
-	_hide_sheets()
-	_close_inspect()
-	target.visible = show
-	if show and which == "workers":
-		workers_opened = true
-	if show and which == "build":
-		_rebuild_cards()
-	if show and which == "log":
-		_refresh_log_sheet()
-	if show and which == "villages":
-		_refresh_villages_sheet()
-	_refresh_ui()
+
+
 
 
 func _set_build_tab(tab: String) -> void:
@@ -2380,13 +2975,14 @@ func _rebuild_cards() -> void:
 		if str(def["tab"]) != build_tab:
 			continue
 		cards_box.add_child(_build_card(str(bname), def))
+	_scroll_to_start.call_deferred(build_scroll)
 
 
 func _build_card(bname: String, def: Dictionary) -> Control:
 	var locked := int(def["lv"]) > level
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(190, 155)
-	b.pressed.connect(_card_pressed.bind(bname))
+	b.custom_minimum_size = Vector2(200, 172)
+	b.pressed.connect(_guarded.bind(_card_pressed.bind(bname)))
 	var vb := VBoxContainer.new()
 	vb.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vb.offset_left = 10
@@ -2429,15 +3025,15 @@ func _card_pressed(bname: String) -> void:
 
 
 func _open_menu() -> void:
-	menu_open = true
 	menu_layer.visible = true
+	_sync_menu_open()
 	new_armed = false
 	new_btn.text = "مخيم جديد"
 
 
 func _close_menu() -> void:
-	menu_open = false
 	menu_layer.visible = false
+	_sync_menu_open()
 
 
 func _toggle_pause() -> void:
@@ -2483,7 +3079,7 @@ func _toast(msg: String, seconds: float = 4.0) -> void:
 func _change_job(res: String, delta: int) -> void:
 	var cur := int(jobs[res])
 	if delta > 0:
-		if _sum_jobs() >= survivors.size():
+		if _sum_jobs() >= _worker_count():
 			_toast("كل الناجين لديهم عمل. أنقص موردًا آخر أولًا.")
 			return
 		jobs[res] = cur + 1
@@ -2525,11 +3121,9 @@ func _refresh_ui() -> void:
 				tl.add_theme_color_override("font_color", C_MUTED)
 	pop_label.text = "%d/%d" % [survivors.size(), _housing_capacity()]
 	# Days-remaining labels for Food and Water
+	var cons_all := _compute_consumption()
 	if n > 0.0 and days_labels.size() > 0:
-		var food_mul_r: float = (0.75 if kitchen_active else 1.0) * float(SEASON_FOOD_MUL[cur_season])
-		var food_rate: float = n * FOOD_PER_VILLAGER * food_mul_r
-		var water_rate: float = n * WATER_PER_VILLAGER * float(SEASON_WATER_MUL[cur_season])
-		for res_d in [["Food", food_rate], ["Water", water_rate]]:
+		for res_d in [["Food", float(cons_all.get("Food", 0.0))], ["Water", float(cons_all.get("Water", 0.0))]]:
 			if not days_labels.has(res_d[0]):
 				continue
 			var dl: Label = days_labels[res_d[0]]
@@ -2545,8 +3139,8 @@ func _refresh_ui() -> void:
 				dl.add_theme_color_override("font_color", Color("#e0c060"))
 	# Crisis overlay: pulse red if food or water < 2 days
 	if is_instance_valid(crisis_overlay):
-		var food_days := float(resources.get("Food", 0.0)) / maxf(1.0, n * FOOD_PER_VILLAGER)
-		var water_days := float(resources.get("Water", 0.0)) / maxf(1.0, n * WATER_PER_VILLAGER)
+		var food_days := float(resources.get("Food", 0.0)) / maxf(1.0, float(cons_all.get("Food", 1.0)))
+		var water_days := float(resources.get("Water", 0.0)) / maxf(1.0, float(cons_all.get("Water", 1.0)))
 		crisis_overlay.visible = (food_days < 2.0 or water_days < 2.0)
 	# Update explore button in villages sheet
 	if is_instance_valid(explore_btn):
@@ -2578,12 +3172,7 @@ func _refresh_ui() -> void:
 			continue
 		var cl: Label = job_count_labels[r]
 		cl.text = str(int(jobs[r]))
-		var net: float = float(last_income.get(r, 0.0))
-		var food_mul := 0.75 if kitchen_active else 1.0
-		if r == "Food":
-			net -= n * FOOD_PER_VILLAGER * food_mul
-		elif r == "Water":
-			net -= n * WATER_PER_VILLAGER
+		var net: float = float(last_income.get(r, 0.0)) - float(cons_all.get(r, 0.0))
 		var rl: Label = job_rate_labels[r]
 		if day > 1:
 			rl.text = "%s%d / يوم" % ["+" if net >= 0.0 else "-", int(round(absf(net)))]
@@ -2628,6 +3217,8 @@ func _refresh_missions() -> void:
 
 
 func _villager_status(v: Villager) -> String:
+	if v.unit != "":
+		return "في الجيش (%s)%s" % [UNITS[v.unit]["ar"], " — في حملة" if v.away else " — يحرس المخيم"]
 	match v.task:
 		"build":
 			if v.target != null:
@@ -2645,27 +3236,287 @@ func _goal_done(key: String) -> bool:
 		"workers": return workers_opened
 		"well": return _has_done("Well")
 		"tent": return _has_done("Tent")
+		"road": return roads.size() >= 4
 		"storehouse": return _has_done("Storehouse")
 		"farm": return _has_done("Farm")
-		"pen": return _has_done("Pen")
+		"zone":
+			var nz := 0
+			for c in zones:
+				if int(zones[c]) == 1:
+					nz += 1
+			return nz >= 2
 		"level2": return level >= 2
-		"kitchen": return kitchen_active
+		"explore": return not discovered_villages.is_empty()
+		"trade": return trades_done > 0
+		"barracks": return _has_done("Barracks") and _soldier_count() >= 2
+		"market": return _has_done("Market")
+		"kitchen": return _has_done("Kitchen")
 		"pop10": return survivors.size() >= 10
+		"defend": return raids_won + raids_lost >= 1
 		"stone_house": return _has_done("Stone House")
 		"level3": return level >= 3
 		"olive_press": return _has_done("Olive Press")
-		"caravan": return day >= CARAVAN_FIRST_DAY
 		"diwan": return council_unlocked
+		"contract": return contracts_signed > 0
+		"upgrade", "upgrade3":
+			var need := 2 if key == "upgrade" else 3
+			for b in buildings:
+				if b.done and b.lvl >= need:
+					return true
+			return false
 		"pop20": return survivors.size() >= 20
-		"day60": return day >= 60
 		"fishing_dock": return _has_done("Fishing Dock")
+		"lair": return lairs_cleared >= 1
 		"level4": return level >= 4
-		"khan": return _has_done("Khan")
 		"mosque": return _has_done("Mosque")
 		"clinic": return _has_done("Clinic")
+		"khan": return _has_done("Khan")
 		"town_square": return _has_done("Town Square")
+		"day60": return day >= 60
+		"level5": return level >= 5
 		"day90": return day >= 90
 	return false
+
+
+func _add_trail_patch(key: Vector2i) -> void:
+	if trail_used >= TRAIL_MAX:
+		return
+	var cx := (float(key.x) + 0.5) * TRAIL_CELL
+	var cz := (float(key.y) + 0.5) * TRAIL_CELL
+	var fr := _footing_range(cx, cz)
+	trail_mm.set_instance_transform(trail_used, Transform3D(Basis(), Vector3(cx, (fr.x + fr.y) * 0.5 + 0.35, cz)))
+	trail_used += 1
+	trail_mm.visible_instance_count = trail_used
+	trail_counts[key] = -1.0
+
+
+func _write_save(path: String, silent: bool) -> void:
+	var blist: Array = []
+	for b in buildings:
+		var pp: Plot = plots[b.plot]
+		blist.append({"type": b.type, "gx": pp.gx, "gz": pp.gz, "progress": b.progress, "done": b.done, "lvl": b.lvl, "rot": b.rot, "active": b.active})
+	var vlist: Array = []
+	for v in survivors:
+		vlist.append([v.vname, v.skill, v.unit])
+	var amounts: Array = []
+	for s in sources:
+		if s.building == null:
+			amounts.append(s.amount)
+	var zl: Array = []
+	for c in zones:
+		zl.append([c.x, c.y, int(zones[c])])
+	var rl: Array = []
+	for k in roads:
+		rl.append([k.x, k.y, int(roads[k])])
+	var tl: Array = []
+	for k2 in trail_counts:
+		if float(trail_counts[k2]) < 0.0 and not roads.has(k2):
+			tl.append([k2.x, k2.y])
+	var vs := {}
+	for idx in village_state:
+		vs[str(idx)] = float(village_state[idx]["rel"])
+	var data := {
+		"version": SAVE_VERSION, "region": "Haifa", "resources": resources, "jobs": jobs, "day": day,
+		"morale": morale, "health": health, "hope": hope, "discontent": discontent,
+		"council_unlocked": council_unlocked, "tax_level_idx": tax_level_idx,
+		"event_cooldown": event_cooldown,
+		"discovered_villages": discovered_villages, "exploring": exploring,
+		"explore_done_day": explore_done_day, "event_log": event_log,
+		"goal": goal_index, "peak": peak_pop, "level": level, "xp": xp,
+		"workers_opened": workers_opened, "buildings": blist, "villagers": vlist, "sources": amounts,
+		"cur_season": cur_season, "season_day": season_day,
+		"zones": zl, "roads": rl, "trails": tl, "village_rel": vs, "contracts": contracts, "requests": requests,
+		"policies": policies.keys(), "raid_next_day": raid_next_day, "raids_won": raids_won, "raids_lost": raids_lost,
+		"lairs_cleared": lairs_cleared, "trades_done": trades_done, "contracts_signed": contracts_signed,
+		"day_timer": day_timer
+	}
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		if not silent:
+			_toast("تعذّر حفظ الملف.")
+		return
+	file.store_string(JSON.stringify(data))
+	if not silent:
+		_toast("حُفظ المخيم على هذا الجهاز.")
+
+
+func _load_game(path: String) -> void:
+	if not FileAccess.file_exists(path):
+		_toast("لا يوجد حفظ هنا بعد.")
+		return
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		_toast("تعذّر قراءة ملف الحفظ.")
+		return
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		_toast("ملف الحفظ تالف.")
+		return
+	var d: Dictionary = parsed
+	var save_ver := int(d.get("version", 0))
+	if str(d.get("region", "")) != "Haifa" or save_ver < MIN_SAVE_VERSION:
+		_toast("هذا الحفظ من إصدار قديم جدًا، سيبدأ مخيم جديد.")
+		return
+	_cancel_placement()
+	_close_inspect()
+	_close_all_modals()
+	if plan_mode != "":
+		_set_plan_mode(plan_mode)
+	for b in buildings:
+		b.node.queue_free()
+	buildings.clear()
+	for p in plots:
+		if is_instance_valid(p.node):
+			p.node.queue_free()
+	plots.clear()
+	occupied_cells.clear()
+	for r in ruin_nodes:
+		if is_instance_valid(r):
+			(r as Node3D).visible = true
+	for i in range(sources.size() - 1, -1, -1):
+		if sources[i].building != null:
+			sources.remove_at(i)
+	for v in survivors:
+		v.node.queue_free()
+	survivors.clear()
+	if is_instance_valid(raid_node):
+		raid_node.queue_free()
+	raid_node = null
+	var saved_res: Dictionary = d.get("resources", {})
+	for r in RES_NAMES:
+		resources[r] = float(saved_res.get(r, resources[r]))
+	var saved_jobs: Dictionary = d.get("jobs", {})
+	for r in START_JOBS:
+		jobs[r] = int(saved_jobs.get(r, 0))
+	day = int(d.get("day", day))
+	day_timer = clampf(float(d.get("day_timer", 0.0)), 0.0, DAY_LENGTH - 0.1)
+	morale = float(d.get("morale", morale))
+	health = float(d.get("health", health))
+	hope = float(d.get("hope", 50.0))
+	discontent = float(d.get("discontent", 0.0))
+	council_unlocked = bool(d.get("council_unlocked", false))
+	tax_level_idx = clampi(int(d.get("tax_level_idx", 0)), 0, TAX_LEVELS.size() - 1)
+	event_cooldown = int(d.get("event_cooldown", 0))
+	discovered_villages.clear()
+	for vi in d.get("discovered_villages", []):
+		var vi_int := int(vi)
+		if vi_int >= 0 and vi_int < VILLAGES.size() and not discovered_villages.has(vi_int):
+			discovered_villages.append(vi_int)
+	exploring = bool(d.get("exploring", false))
+	explore_done_day = int(d.get("explore_done_day", -1))
+	event_log.clear()
+	for entry in d.get("event_log", []):
+		event_log.append(str(entry))
+	peak_pop = int(d.get("peak", START_POP))
+	level = clampi(int(d.get("level", 1)), 1, MAX_LEVEL)
+	xp = float(d.get("xp", 0.0))
+	workers_opened = bool(d.get("workers_opened", false))
+	cur_season = clampi(int(d.get("cur_season", 0)), 0, 3)
+	season_day = clampi(int(d.get("season_day", 0)), 0, SEASON_DAYS - 1)
+	# planning layers
+	zones.clear()
+	for z in d.get("zones", []):
+		if typeof(z) == TYPE_ARRAY and z.size() >= 3 and ZONE_AR.has(int(z[2])):
+			zones[Vector2i(int(z[0]), int(z[1]))] = int(z[2])
+	roads.clear()
+	trail_counts.clear()
+	trail_used = 0
+	trail_mm.visible_instance_count = 0
+	for rd in d.get("roads", []):
+		if typeof(rd) == TYPE_ARRAY and rd.size() >= 3:
+			var k := Vector2i(int(rd[0]), int(rd[1]))
+			roads[k] = clampi(int(rd[2]), ROAD_DIRT, ROAD_PAVED)
+			trail_counts[k] = -1.0
+	_rebuild_road_meshes()
+	for tr in d.get("trails", []):
+		if typeof(tr) == TYPE_ARRAY and tr.size() >= 2:
+			_add_trail_patch(Vector2i(int(tr[0]), int(tr[1])))
+	# trade & army state
+	village_state.clear()
+	var vrel: Dictionary = d.get("village_rel", {})
+	for key in vrel:
+		village_state[int(key)] = {"rel": float(vrel[key]), "used": {}}
+	for vi2 in discovered_villages:
+		_vstate(vi2)
+	contracts.clear()
+	for c in d.get("contracts", []):
+		if typeof(c) == TYPE_DICTIONARY and c.has("v") and RES_AR.has(str(c.get("res", ""))):
+			contracts.append({"v": int(c["v"]), "kind": str(c["kind"]), "res": str(c["res"]), "qty": int(c["qty"]), "dinar": int(c["dinar"]), "next": int(c["next"])})
+	requests.clear()
+	for rq in d.get("requests", []):
+		if typeof(rq) == TYPE_DICTIONARY and rq.has("v") and RES_AR.has(str(rq.get("res", ""))):
+			requests.append({"v": int(rq["v"]), "res": str(rq["res"]), "qty": int(rq["qty"]), "reward": int(rq["reward"]), "until": int(rq["until"])})
+	policies.clear()
+	for pk in d.get("policies", []):
+		if POLICIES.has(str(pk)):
+			policies[str(pk)] = true
+	raid_next_day = maxi(int(d.get("raid_next_day", maxi(RAID_FIRST_DAY, day + 4))), day + 1)
+	raid_warned = false
+	raids_won = int(d.get("raids_won", 0))
+	raids_lost = int(d.get("raids_lost", 0))
+	lairs_cleared = clampi(int(d.get("lairs_cleared", 0)), 0, BANDIT_LAIRS.size())
+	trades_done = int(d.get("trades_done", 0))
+	contracts_signed = int(d.get("contracts_signed", contracts.size()))
+	expedition_day = -1
+	expedition_lair = -1
+	caravan_until = -1
+	caravan_deals.clear()
+	var amounts: Array = d.get("sources", [])
+	var idx := 0
+	for s in sources:
+		if s.building == null:
+			if idx < amounts.size():
+				s.amount = float(amounts[idx])
+				_update_source_visual(s)
+			idx += 1
+	for e in d.get("buildings", []):
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		var ed: Dictionary = e
+		var t := str(ed.get("type", ""))
+		if not BUILDINGS.has(t):
+			continue
+		var gx_b := int(ed.get("gx", 0))
+		var gz_b := int(ed.get("gz", 0))
+		var cls_b := str(BUILDINGS[t]["cls"])
+		if not _cells_free(gx_b, gz_b, cls_b):
+			continue
+		var lvl_b := int(ed.get("lvl", int(ed.get("upgrade", 0)) + 1))
+		var new_p := _create_dynamic_plot(gx_b, gz_b, cls_b)
+		var new_b := _spawn_building(t, new_p.idx, float(ed.get("progress", 1.0)), bool(ed.get("done", true)), float(ed.get("rot", -1.0)), lvl_b)
+		new_b.active = bool(ed.get("active", true))
+		for s2 in sources:
+			if s2.building == new_b:
+				_apply_source_stats(s2, new_b)
+		if new_b.done and BUILDINGS[t].get("council", false):
+			council_unlocked = true
+	for e2 in d.get("villagers", []):
+		if typeof(e2) == TYPE_ARRAY and e2.size() >= 2 and SKILL_COLORS.has(str(e2[1])):
+			var nv := _add_villager(str(e2[0]), str(e2[1]))
+			if e2.size() >= 3 and UNITS.has(str(e2[2])):
+				nv.unit = str(e2[2])
+				nv.task = "guard"
+				nv.goal = _patrol_point()
+				_refresh_villager_look(nv)
+	if survivors.is_empty():
+		for i in range(START_POP):
+			_add_villager(NAMES[i], SKILLS[i % SKILLS.size()])
+	if save_ver >= SAVE_VERSION:
+		goal_index = clampi(int(d.get("goal", 0)), 0, GOALS.size())
+	else:
+		goal_index = 0
+		while goal_index < GOALS.size() and _goal_done(str(GOALS[goal_index]["key"])):
+			goal_index += 1
+	_clamp_jobs()
+	_update_land_value()
+	game_over = false
+	over_layer.visible = false
+	_refresh_plots()
+	_assign_tasks()
+	_check_goals()
+	_refresh_ui()
+	_close_menu()
+	_toast("تم تحميل المخيم.")
 
 
 # ---------------------------------------------------------------- survivors
@@ -2708,7 +3559,9 @@ func _hint_no_source(res: String) -> void:
 		"Water":
 			tip = "ابنِ بئرًا."
 		"Wood":
-			tip = "الأشجار تنمو ببطء؛ انتظر أو انقل العمال."
+			tip = "ابنِ «كوخ الحطّاب» لحطب لا ينضب."
+		"Oil":
+			tip = "ابنِ معصرة زيتون."
 	_toast("لم يبقَ %s قريب للجمع. %s" % [RES_AR[res], tip], 5.0)
 
 
@@ -2753,7 +3606,9 @@ func _add_xp(amount: float) -> void:
 		for p in plots:
 			if p.lv == level:
 				opened += 1
-		var msg := "ارتقى المخيم إلى المستوى %d!" % level
+		var msg := "ارتقى المخيم إلى المستوى %d! اتسعت حدود البناء." % level
+		if is_instance_valid(territory_ring):
+			_show_territory(true)
 		if not names.is_empty():
 			msg += " فُتح: %s" % "، ".join(names)
 		if opened > 0:
@@ -2769,11 +3624,29 @@ func _add_xp(amount: float) -> void:
 func _start_placing(bname: String) -> void:
 	_hide_sheets()
 	_close_inspect()
+	if plan_mode != "":
+		_set_plan_mode(plan_mode)
 	selected_building = bname
 	dock.visible = false
 	place_bar.visible = true
-	# Start ghost at camp centre
-	_update_ghost_placement(camp_pos)
+	_show_territory(true)
+	var start := camera_target
+	if bool(BUILDINGS[bname].get("coastal", false)):
+		_toast("رصيف الصيد يُبنى على خط الشاطئ فقط. مدّ طريقًا غربًا إلى البحر ثم المس الشاطئ.", 6.0)
+	_update_ghost_placement(start)
+
+
+func _noise_warning(center: Vector2, cat: String) -> String:
+	var noisy := ["Quarry", "Workshop", "Small Quarry", "Pen", "Olive Press", "Barracks"]
+	for b in buildings:
+		var bp := Vector2(b.pos.x, b.pos.z)
+		if bp.distance_to(center) > 190.0:
+			continue
+		if cat == "res" and noisy.has(b.type):
+			return "تنبيه: «%s» قريب — ضجيج يخفض قيمة الأرض ومعنويات السكان." % BUILDINGS[b.type]["ar"]
+		if (cat == "ind" or cat == "agri") and _housing_of(b) > 0:
+			return "تنبيه: بيوت قريبة — سيزعج هذا المبنى الجيران."
+	return ""
 
 
 func _update_ghost_placement(hp: Vector3) -> void:
@@ -2781,21 +3654,24 @@ func _update_ghost_placement(hp: Vector3) -> void:
 		return
 	var def: Dictionary = BUILDINGS[selected_building]
 	var cls := str(def["cls"])
-	var cell := _world_to_grid(hp.x, hp.z)
-	var gx := cell.x
-	var gz := cell.y
-	var valid := _can_place(gx, gz, cls, selected_building)
+	var anchor := _anchor_from_world(hp.x, hp.z, cls)
+	var gx := anchor.x
+	var gz := anchor.y
+	var problem := _place_problem(gx, gz, cls, selected_building)
+	var valid := problem == ""
 	var sz: Vector2 = PLOT_SIZES[cls]
+	var c := _footprint_center(gx, gz, cls)
+	var hr := _footprint_heights(c, sz)
 	var bm: BoxMesh = ghost_mesh.mesh
-	bm.size = Vector3(sz.x * 0.88, 34.0, sz.y * 0.88)
+	bm.size = Vector3(sz.x * 0.9, 34.0, sz.y * 0.9)
 	ghost_mesh.position = Vector3(0, 19, 0)
-	ghost.position = _grid_to_world(gx, gz)
+	ghost.position = Vector3(c.x, hr.y, c.y)
+	ghost.rotation_degrees.y = _facing_for(c, cls)
 	ghost.visible = true
-	var lv_here := _get_land_value(gx, gz)
-	var min_lv_req := float(MIN_LAND_VALUE_REQ.get(selected_building, 0.0))
+	var lv_here := _footprint_land_value(gx, gz, cls)
 	if valid:
-		var lv_frac := clampf(lv_here / 80.0, 0.0, 1.0)
-		ghost_mat.albedo_color = Color(0.25 + (1.0 - lv_frac) * 0.15, 0.6 + lv_frac * 0.35, 0.25, 0.50)
+		var lv_frac := clampf(lv_here / 60.0, 0.0, 1.0)
+		ghost_mat.albedo_color = Color(0.3, 0.62 + lv_frac * 0.3, 0.3, 0.5)
 	else:
 		ghost_mat.albedo_color = Color(0.9, 0.3, 0.3, 0.45)
 	pending_gx = gx
@@ -2803,12 +3679,18 @@ func _update_ghost_placement(hp: Vector3) -> void:
 	pending_valid = valid
 	var status: String
 	if valid:
-		var lv_info := (" — قيمة الأرض: %d/100" % int(lv_here)) if lv_here > 0.0 else ""
-		status = "✓ موقع صالح%s — المس «تأكيد البناء»" % lv_info
-	elif min_lv_req > 0.0 and lv_here < min_lv_req:
-		status = "✗ قيمة الأرض منخفضة (تحتاج %d، لديك %d) — ابنِ مساجد وخدمات قريبة." % [int(min_lv_req), int(lv_here)]
+		var extras: Array[String] = ["قيمة الأرض %d" % int(lv_here)]
+		var cat := str(def.get("cat", "any"))
+		if _zone_matches(gx, gz, cls, cat):
+			extras.append("منطقة مناسبة +20%")
+		if hr.y - hr.x > 1.5:
+			extras.append("على مصطبة حجرية")
+		status = "✓ موقع صالح (%s) — المس «تأكيد البناء»" % "، ".join(extras)
+		var warn := _noise_warning(c, cat)
+		if warn != "":
+			status += "\n" + warn
 	else:
-		status = "✗ مشغول أو خارج الحدود"
+		status = "✗ " + problem
 	place_label.text = "%s — %s\n%s" % [def["ar"], _cost_text(def["cost"]), status]
 
 
@@ -2826,9 +3708,11 @@ func _cancel_placement() -> void:
 	pending_valid = false
 	if is_instance_valid(ghost):
 		ghost.visible = false
+	if plan_mode == "":
+		_show_territory(false)
 	if is_instance_valid(place_bar):
 		place_bar.visible = false
-		if inspected == null:
+		if inspected == null and plan_mode == "":
 			dock.visible = true
 
 
@@ -2842,10 +3726,12 @@ func _confirm_build() -> void:
 	if missing != "":
 		_toast("ينقصك %s." % RES_AR[missing])
 		return
-	# Verify still valid (no race)
-	if not _can_place(pending_gx, pending_gz, str(def["cls"]), selected_building):
-		_toast("تغيّر الموقع، اختر مكانًا آخر.")
-		_update_ghost_placement(ghost.position)
+	var problem := _place_problem(pending_gx, pending_gz, str(def["cls"]), selected_building)
+	if problem != "":
+		_toast(problem)
+		return
+	if def.has("defense") and selected_building == "Wall" and _count_type("Wall") >= 8:
+		_toast("الحد الأقصى 8 قطع سور.")
 		return
 	for r in cost:
 		resources[r] = float(resources[r]) - float(cost[r])
@@ -2859,7 +3745,35 @@ func _confirm_build() -> void:
 	_toast("وُضع أساس «%s». البنّاؤون في الطريق." % def["ar"])
 
 
-func _spawn_building(type: String, plot_idx: int, progress: float, done: bool) -> Building:
+func _count_type(t: String) -> int:
+	var n := 0
+	for b in buildings:
+		if b.type == t:
+			n += 1
+	return n
+
+
+const LEVEL_NAMES := {
+	"Tent": ["خيمة", "خيمة مرقّعة", "بيت شعر"],
+	"Well": ["بئر", "بئر معقودة", "بئر بناعورة"],
+	"Farm": ["مزرعة", "مزرعة مسقية", "مزرعة مدرّجات"],
+	"Fishing Dock": ["رصيف الصيد", "ميناء صيد", "ميناء حيفا"],
+	"Mosque": ["جامع", "جامع بقبتين", "الجامع الكبير"],
+	"Market": ["السوق", "سوق مسقوف", "السوق الكبير"],
+	"Barracks": ["الثكنة", "حامية", "قلعة الحامية"],
+	"Watchtower": ["برج المراقبة", "برج حجري", "برج الحرس"],
+}
+const MAX_BLD_LEVEL := 3
+
+
+func _bld_name(b: Building) -> String:
+	if LEVEL_NAMES.has(b.type):
+		return str(LEVEL_NAMES[b.type][b.lvl - 1])
+	var base := str(BUILDINGS[b.type]["ar"])
+	return base if b.lvl == 1 else "%s (م%d)" % [base, b.lvl]
+
+
+func _spawn_building(type: String, plot_idx: int, progress: float, done: bool, rot: float = -1.0, lvl: int = 1) -> Building:
 	var p: Plot = plots[plot_idx]
 	var def: Dictionary = BUILDINGS[type]
 	var b := Building.new()
@@ -2868,9 +3782,13 @@ func _spawn_building(type: String, plot_idx: int, progress: float, done: bool) -
 	b.pos = p.pos
 	b.progress = progress
 	b.done = done
+	b.lvl = clampi(lvl, 1, MAX_BLD_LEVEL)
+	b.rot = rot if rot >= 0.0 else _facing_for(Vector2(p.pos.x, p.pos.z), p.cls)
+	b.zone_bonus = _zone_matches(p.gx, p.gz, p.cls, str(def.get("cat", "any")))
 	b.base_scale = float(def["scale"])
 	b.node = Node3D.new()
 	b.node.position = b.pos
+	b.node.rotation_degrees.y = b.rot
 	building_root.add_child(b.node)
 	b.model = _make_building_model(type)
 	b.model.position.y = 2.0
@@ -2881,7 +3799,7 @@ func _spawn_building(type: String, plot_idx: int, progress: float, done: bool) -
 		b.scaffold = _make_scaffold(p.size.x, p.size.y)
 		b.node.add_child(b.scaffold)
 		b.label = Label3D.new()
-		b.label.font = ar_font
+		b.label.font = ui_font_bold
 		b.label.font_size = 36
 		b.label.pixel_size = 0.9
 		b.label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -2891,12 +3809,299 @@ func _spawn_building(type: String, plot_idx: int, progress: float, done: bool) -
 		b.label.position = Vector3(0, 80, 0)
 		b.node.add_child(b.label)
 	else:
-		b.model.scale = Vector3.ONE * b.base_scale
+		_apply_level_visual(b)
 	buildings.append(b)
 	if done:
 		_add_building_source(b)
 	_refresh_plots()
 	return b
+
+
+# Visual growth per building level: slightly larger, then planters and a banner, then a fence and lanterns.
+func _apply_level_visual(b: Building) -> void:
+	var s := b.base_scale * (1.0 + 0.06 * float(b.lvl - 1))
+	b.model.scale = Vector3.ONE * s
+	var old := b.node.get_node_or_null("Decor")
+	if old != null:
+		old.free()
+	if b.lvl < 2:
+		return
+	var p: Plot = plots[b.plot]
+	var d := Node3D.new()
+	d.name = "Decor"
+	b.node.add_child(d)
+	var hx := p.size.x * 0.5 - 8.0
+	var hz := p.size.y * 0.5 - 8.0
+	for sx in [-1.0, 1.0]:
+		_box(d, Vector3(9, 5, 9), Vector3(sx * hx, 4.5, hz), Color.WHITE, true)
+		_cyl(d, 1.0, 1.4, 8.0, Vector3(sx * hx, 10, hz), Color("#6b553c"))
+		_sphere(d, 5.0, Vector3(sx * hx, 16, hz), Color("#6f8a4a"))
+	_cyl(d, 0.9, 0.9, 40.0, Vector3(hx, 22, -hz), Color("#8a6a40"))
+	_box(d, Vector3(12, 7, 1.0), Vector3(hx - 6.5, 37, -hz), C_GOLD)
+	if b.lvl < 3:
+		return
+	for side in [-1.0, 1.0]:
+		_box(d, Vector3(p.size.x, 5, 2.5), Vector3(0, 4.5, side * (p.size.y * 0.5 - 1.5)), Color("#efe4c8"), true)
+		_box(d, Vector3(2.5, 5, p.size.y), Vector3(side * (p.size.x * 0.5 - 1.5), 4.5, 0), Color("#efe4c8"), true)
+	var lamp := StandardMaterial3D.new()
+	lamp.albedo_color = Color("#ffd27a")
+	lamp.emission_enabled = true
+	lamp.emission = Color("#ffb347")
+	lamp.emission_energy_multiplier = 1.6
+	for sx2 in [-0.25, 0.25]:
+		_cyl(d, 0.7, 0.7, 16.0, Vector3(sx2 * p.size.x, 10, hz + 4.0), Color("#3a3530"))
+		var l := _sphere(d, 2.6, Vector3(sx2 * p.size.x, 19, hz + 4.0), Color.WHITE)
+		l.material_override = lamp
+
+
+func _apply_source_stats(s: Source, b: Building) -> void:
+	var g: Dictionary = BUILDINGS[b.type]["gather"]
+	if g.is_empty():
+		return
+	var mult := _lvl_mult(b) * ((1.0 + ZONE_BONUS) if b.zone_bonus else 1.0)
+	s.yield_amt = float(g["yield"]) * mult
+	s.gather_time = float(g["time"])
+	s.slots = (int(g["slots"]) + b.lvl - 1) if b.active else 0
+
+
+func _add_building_source(b: Building) -> void:
+	var def: Dictionary = BUILDINGS[b.type]
+	var g: Dictionary = def["gather"]
+	if g.is_empty():
+		return
+	var p: Plot = plots[b.plot]
+	var s := Source.new()
+	s.res = str(g["res"])
+	s.label = str(def["ar"])
+	var depth := p.size.y if (is_equal_approx(b.rot, 0.0) or is_equal_approx(b.rot, 180.0)) else p.size.x
+	var off := Basis(Vector3.UP, deg_to_rad(b.rot)) * Vector3(0, 0, depth * 0.5 + 12.0)
+	s.pos = b.pos + off
+	s.pos.y = _height_at_world(s.pos.x, s.pos.z)
+	s.infinite = true
+	s.building = b
+	_apply_source_stats(s, b)
+	sources.append(s)
+
+
+func _complete_building(b: Building) -> void:
+	var def: Dictionary = BUILDINGS[b.type]
+	b.done = true
+	b.progress = 1.0
+	if is_instance_valid(b.scaffold):
+		b.scaffold.queue_free()
+	if is_instance_valid(b.label):
+		b.label.queue_free()
+	_apply_level_visual(b)
+	var target_scale := b.model.scale
+	var tw := create_tween()
+	tw.tween_property(b.model, "scale", target_scale, 0.35).from(target_scale * 1.12)
+	_add_building_source(b)
+	_add_xp(float(def["xp"]))
+	if def.get("council", false) and not council_unlocked:
+		council_unlocked = true
+		_toast("افتُتح الديوان! المسه لإدارة الضرائب والسياسات.", 6.0)
+	if def.get("barracks", false):
+		_toast("الثكنة جاهزة — افتح «الجيش» لتجنيد المدافعين.", 6.0)
+	if def.get("market", false):
+		_toast("السوق مفتوح — دخل يومي من الدنانير، وصار بإمكانك توقيع عقود تجارية.", 6.0)
+	_update_land_value()
+	_assign_tasks()
+	_check_goals()
+	_refresh_ui()
+	if not def.get("council", false) and not def.get("barracks", false) and not def.get("market", false):
+		_toast("اكتمل بناء «%s»!" % def["ar"])
+	_log_event("🏗 يوم %d: اكتمل بناء %s." % [day, str(def["ar"])])
+
+
+func _upkeep_text(type: String) -> String:
+	var up: Dictionary = BUILDINGS[type].get("upkeep", {})
+	if up.is_empty():
+		return "بلا تكلفة يومية"
+	var parts: Array[String] = []
+	for r in up:
+		parts.append("%s %s" % [_fmt(float(up[r])), RES_AR[r]])
+	return "تكلفة يومية: " + "، ".join(parts)
+
+
+func _fmt(v: float) -> String:
+	if absf(v - round(v)) < 0.05:
+		return str(int(round(v)))
+	return "%.1f" % v
+
+
+func _building_status(b: Building) -> String:
+	var def: Dictionary = BUILDINGS[b.type]
+	if not b.done:
+		return "%s — قيد البناء (%d%%)" % [def["ar"], int(b.progress * 100.0)]
+	var lines: Array[String] = []
+	lines.append("%s  •  المستوى %d" % [_bld_name(b), b.lvl])
+	if not b.active:
+		lines.append("⚠ متوقف: لم تُدفع التكلفة اليومية (%s)" % _upkeep_text(b.type).replace("تكلفة يومية: ", ""))
+	var g: Dictionary = def["gather"]
+	if not g.is_empty():
+		var users := 0
+		var slots := 0
+		var yld := 0.0
+		for s in sources:
+			if s.building == b:
+				users = _source_users(s, null)
+				slots = s.slots
+				yld = s.yield_amt
+		lines.append("العاملون: %d من %d — %s %s لكل جولة" % [users, slots, _fmt(yld), RES_AR[str(g["res"])]])
+	var h := _housing_of(b)
+	if h > 0:
+		lines.append("يسكنه حتى %d ناجين" % h)
+	if SERVICE_COVERAGE.has(b.type):
+		var pts := _housing_points()
+		var total := 0.0
+		for pt in pts:
+			total += float(pt[1])
+		lines.append("يغطي %d%% من بيوت المستوطنة (الدائرة الزرقاء)" % int(_coverage_share(b, pts, total) * 100.0))
+	if def.has("defense"):
+		lines.append("دفاع +%d" % int(float(def["defense"]) * _lvl_mult(b)))
+	if def.get("barracks", false):
+		lines.append("سعة الجنود: %d" % (6 * b.lvl))
+	if b.zone_bonus:
+		lines.append("✓ في منطقته المناسبة: +20%")
+	lines.append(_upkeep_text(b.type))
+	return "\n".join(lines)
+
+
+func _upgrade_cost(b: Building) -> Dictionary:
+	var base: Dictionary = BUILDINGS[b.type]["cost"]
+	var f := 0.8 if b.lvl == 1 else 1.4
+	var out := {}
+	for r in base:
+		out[r] = ceilf(float(base[r]) * f)
+	if b.lvl == 2:
+		out["Dinar"] = float(out.get("Dinar", 0.0)) + 10.0
+	return out
+
+
+func _upgrade_req_level(b: Building) -> int:
+	return 2 if b.lvl == 1 else 4
+
+
+func _inspect_building(b: Building) -> void:
+	if selected_building != "" or plan_mode != "":
+		return
+	_hide_sheets()
+	inspected = b
+	demolish_armed = false
+	demolish_btn.text = "هدم"
+	dock.visible = false
+	inspect_bar.visible = true
+	inspect_label.text = _building_status(b)
+	var def: Dictionary = BUILDINGS[b.type]
+	if b.done and b.lvl < MAX_BLD_LEVEL:
+		var cost := _upgrade_cost(b)
+		var parts: Array[String] = []
+		for r in cost:
+			parts.append("%d %s" % [int(cost[r]), RES_AR[r]])
+		var req := _upgrade_req_level(b)
+		if level < req:
+			upgrade_btn.text = "ترقية للمستوى %d\n(يتطلب المخيم م%d)" % [b.lvl + 1, req]
+		else:
+			upgrade_btn.text = "ترقية للمستوى %d\n%s" % [b.lvl + 1, "، ".join(parts)]
+		upgrade_btn.visible = true
+	else:
+		upgrade_btn.visible = false
+	council_btn.visible = b.done and bool(def.get("council", false))
+	army_btn.visible = b.done and bool(def.get("barracks", false))
+	trade_btn.visible = b.done and (bool(def.get("market", false)) or bool(def.get("stable", false)))
+	_show_coverage_ring(b if b.done else null)
+
+
+func _close_inspect() -> void:
+	inspected = null
+	demolish_armed = false
+	_show_coverage_ring(null)
+	if is_instance_valid(inspect_bar):
+		inspect_bar.visible = false
+		if selected_building == "" and plan_mode == "":
+			dock.visible = true
+
+
+func _upgrade_pressed() -> void:
+	if inspected == null or not inspected.done or inspected.lvl >= MAX_BLD_LEVEL:
+		return
+	var req := _upgrade_req_level(inspected)
+	if level < req:
+		_toast("الترقية إلى المستوى %d تتطلب بلوغ المخيم المستوى %d." % [inspected.lvl + 1, req])
+		return
+	var cost := _upgrade_cost(inspected)
+	var missing := _missing_resource(cost)
+	if missing != "":
+		_toast("ينقصك %s للترقية (%d مطلوب)." % [RES_AR[missing], int(cost[missing])])
+		return
+	for r in cost:
+		resources[r] = float(resources[r]) - float(cost[r])
+	var b := inspected
+	b.lvl += 1
+	_apply_level_visual(b)
+	var tw := create_tween()
+	tw.tween_property(b.model, "scale", b.model.scale, 0.4).from(b.model.scale * 1.15)
+	for s in sources:
+		if s.building == b:
+			_apply_source_stats(s, b)
+	_toast("رُقّي «%s» إلى المستوى %d!" % [str(BUILDINGS[b.type]["ar"]), b.lvl], 4.0)
+	_log_event("⬆ يوم %d: ترقية %s إلى م%d." % [day, str(BUILDINGS[b.type]["ar"]), b.lvl])
+	_add_xp(15.0 + 10.0 * float(b.lvl))
+	_update_land_value()
+	_check_goals()
+	_inspect_building(b)
+	_assign_tasks()
+	_refresh_ui()
+
+
+func _demolish_pressed() -> void:
+	if inspected == null:
+		return
+	var b := inspected
+	var def: Dictionary = BUILDINGS[b.type]
+	var h := _housing_of(b)
+	if h > 0 and survivors.size() > _housing_capacity() - h:
+		_toast("ما زال ناجون يسكنون هذا المبنى. ابنِ مأوى بديلًا أولًا.")
+		return
+	if def.get("barracks", false) and b.done and _soldier_count() > _barracks_capacity() - 6 * b.lvl:
+		_toast("سرّح بعض الجنود أولًا — الثكنة ممتلئة.")
+		return
+	if not demolish_armed:
+		demolish_armed = true
+		demolish_btn.text = "تأكيد الهدم؟"
+		return
+	var cost: Dictionary = def["cost"]
+	for r in cost:
+		resources[r] = float(resources[r]) + floorf(float(cost[r]) * 0.5)
+	for i in range(sources.size() - 1, -1, -1):
+		if sources[i].building == b:
+			sources.remove_at(i)
+	for v in survivors:
+		if v.src != null and not sources.has(v.src):
+			v.src = null
+			if v.task == "gather" and v.state != "to_store":
+				v.state = "seek"
+				v.wait = 0.0
+	var pp: Plot = plots[b.plot]
+	for cell in _cells_for(pp.gx, pp.gz, pp.cls):
+		occupied_cells.erase(cell)
+	if is_instance_valid(pp.node):
+		pp.node.queue_free()
+	pp.node = null
+	pp.slab = null
+	pp.building = null
+	buildings.erase(b)
+	b.node.queue_free()
+	if def.get("council", false) and not _has_done("Diwan"):
+		council_unlocked = false
+		tax_level_idx = 0
+		policies.clear()
+	_toast("هُدم «%s» واستُعيد نصف المواد." % def["ar"])
+	_close_inspect()
+	_update_land_value()
+	_refresh_plots()
+	_assign_tasks()
+	_refresh_ui()
 
 
 func _update_construction(dt: float) -> void:
@@ -2918,323 +4123,306 @@ func _update_construction(dt: float) -> void:
 			_complete_building(b)
 
 
-func _complete_building(b: Building) -> void:
-	var def: Dictionary = BUILDINGS[b.type]
-	b.done = true
-	b.progress = 1.0
-	if is_instance_valid(b.scaffold):
-		b.scaffold.queue_free()
-	if is_instance_valid(b.label):
-		b.label.queue_free()
-	b.model.scale = Vector3.ONE * b.base_scale
-	var tw := create_tween()
-	tw.tween_property(b.model, "scale", Vector3.ONE * b.base_scale, 0.35).from(Vector3.ONE * b.base_scale * 1.12)
-	_add_building_source(b)
-	_add_xp(float(def["xp"]))
-	if def.get("kitchen", false):
-		kitchen_active = true
-		_toast("المطبخ جاهز — الاستهلاك اليومي للطعام انخفض 25%!", 5.0)
-	elif def.get("council", false):
-		council_unlocked = true
-		_toast("افتُتح الديوان! يمكنك الآن فرض الضرائب وإصدار القرارات.", 6.0)
-	_assign_tasks()
-	_check_goals()
-	_refresh_ui()
-	_toast("اكتمل بناء «%s»!" % def["ar"])
-	_log_event("🏗 يوم %d: اكتمل بناء %s." % [day, str(def["ar"])])
 
 
-func _building_status(b: Building) -> String:
-	var def: Dictionary = BUILDINGS[b.type]
-	if not b.done:
-		return "%s — قيد البناء (%d%%)" % [def["ar"], int(b.progress * 100.0)]
-	var g: Dictionary = def["gather"]
-	if not g.is_empty():
-		var users := 0
-		for s in sources:
-			if s.building == b:
-				users = _source_users(s, null)
-		return "%s — %s\nالعاملون الآن: %d من %d" % [def["ar"], def["desc"], users, int(g["slots"])]
-	return "%s — %s" % [def["ar"], def["desc"]]
 
 
-func _inspect_building(b: Building) -> void:
-	if selected_building != "":
-		return
-	_hide_sheets()
-	inspected = b
-	demolish_armed = false
-	demolish_btn.text = "هدم (يعود نصف المواد)"
-	dock.visible = false
-	inspect_bar.visible = true
-	inspect_label.text = _building_status(b)
-	var def: Dictionary = BUILDINGS[b.type]
-	if b.done and def.has("upgrade") and b.upgrade_level == 0:
-		var upg: Dictionary = def["upgrade"]
-		var cost_parts: Array = []
-		for r in upg.get("cost", {}):
-			cost_parts.append("%d %s" % [int(upg["cost"][r]), RES_AR.get(r, r)])
-		upgrade_btn.text = "ترقية: %s\n(%s)" % [str(upg.get("ar", "")), ", ".join(cost_parts)]
-		upgrade_btn.visible = true
-	else:
-		upgrade_btn.visible = false
-	if is_instance_valid(council_btn):
-		council_btn.visible = b.done and bool(def.get("council", false))
 
 
-func _close_inspect() -> void:
-	inspected = null
-	demolish_armed = false
-	if is_instance_valid(inspect_bar):
-		inspect_bar.visible = false
-		if selected_building == "":
-			dock.visible = true
 
 
-func _show_council_panel() -> void:
-	var layer := CanvasLayer.new()
-	layer.layer = 19
-	add_child(layer)
-	var bg := ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.65)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(bg)
-	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.custom_minimum_size = Vector2(580, 0)
-	panel.layout_direction = Control.LAYOUT_DIRECTION_RTL
-	panel.add_theme_stylebox_override("panel", _style(Color(0.08, 0.06, 0.03, 0.96), 18, C_GOLD, 2, 16))
-	layer.add_child(panel)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 14)
-	panel.add_child(vb)
-	vb.add_child(_label("الديوان — مجلس المستوطنة", 28, C_GOLD))
-	# Dinar + discontent status
-	var stat := HBoxContainer.new()
-	stat.add_theme_constant_override("separation", 24)
-	vb.add_child(stat)
-	stat.add_child(_label("الدنانير: %d" % int(resources.get("Dinar", 0.0)), 20, C_GOLD))
-	stat.add_child(_label("السخط: %d%%" % int(discontent), 20, Color("#e06040")))
-	# Demand bars (CS-style RCI)
-	vb.add_child(_label("الطلب:", 20, C_CREAM))
-	var dem_box := VBoxContainer.new()
-	dem_box.add_theme_constant_override("separation", 6)
-	vb.add_child(dem_box)
-	for drow in [
-		["🏠 سكن",   demand_housing,    Color("#60a0e0")],
-		["⛏ إنتاج", demand_production,  Color("#e0a040")],
-		["🏛 خدمات", demand_services,    Color("#70c070")],
-	]:
-		var dr := HBoxContainer.new()
-		dr.add_theme_constant_override("separation", 8)
-		dem_box.add_child(dr)
-		var dl := _label(str(drow[0]), 17, C_CREAM)
-		dl.custom_minimum_size = Vector2(100, 0)
-		dr.add_child(dl)
-		var bar := ProgressBar.new()
-		bar.min_value = 0; bar.max_value = 100
-		bar.value = float(drow[1])
-		bar.custom_minimum_size = Vector2(220, 18)
-		bar.show_percentage = false
-		var sty := StyleBoxFlat.new()
-		sty.bg_color = Color(drow[2])
-		sty.corner_radius_top_left = 3; sty.corner_radius_top_right = 3
-		sty.corner_radius_bottom_left = 3; sty.corner_radius_bottom_right = 3
-		bar.add_theme_stylebox_override("fill", sty)
-		dr.add_child(bar)
-		dr.add_child(_label("%d%%" % int(float(drow[1])), 17, C_MUTED))
-	# Tax level selector
-	vb.add_child(_label("مستوى الضريبة:", 20, C_CREAM))
-	var tax_row := HBoxContainer.new()
-	tax_row.add_theme_constant_override("separation", 10)
-	vb.add_child(tax_row)
-	for ti in range(TAX_LEVELS.size()):
-		var tl: Dictionary = TAX_LEVELS[ti]
-		var col := C_GREEN if ti == tax_level_idx else C_BTN
-		var lyr := layer
-		var ti_cap := ti
-		var tb2 := _button(str(tl["ar"]), func():
-			tax_level_idx = ti_cap
-			lyr.queue_free()
-			_toast("الضريبة الجديدة: %s (+%d دينار/يوم، سخط +%.1f/يوم)" % [str(TAX_LEVELS[ti_cap]["ar"]), int(TAX_LEVELS[ti_cap]["dinar"]), float(TAX_LEVELS[ti_cap]["discontent"])])
-		, Vector2(130, 54), 17, col)
-		tax_row.add_child(tb2)
-	# Council actions
-	vb.add_child(_label("قرارات المجلس:", 20, C_CREAM))
-	var act_row := HBoxContainer.new()
-	act_row.add_theme_constant_override("separation", 10)
-	vb.add_child(act_row)
-	# Feast: costs food, boosts morale
-	var lyr2 := layer
-	act_row.add_child(_button("وليمة عامة\n(−20 طعام، +20 معنويات)", func():
-		if float(resources.get("Food", 0.0)) >= 20.0:
-			resources["Food"] = float(resources["Food"]) - 20.0
-			morale = minf(100.0, morale + 20.0)
-			discontent = maxf(0.0, discontent - 10.0)
-			_log_event("🍽 يوم %d: وليمة عامة — معنويات +20." % day)
-			_toast("أُقيمت وليمة! المعنويات ترتفع +20. 🍽", 4.0)
-			lyr2.queue_free()
-			_refresh_ui()
-		else:
-			_toast("طعام غير كافٍ (يلزم 20).")
-	, Vector2(190, 70), 16, Color("#8a4a20")))
-	var lyr3 := layer
-	act_row.add_child(_button("خطاب تشجيعي\n(−5 دينار، سخط −15)", func():
-		if float(resources.get("Dinar", 0.0)) >= 5.0:
-			resources["Dinar"] = float(resources["Dinar"]) - 5.0
-			discontent = maxf(0.0, discontent - 15.0)
-			hope = minf(100.0, hope + 10.0)
-			_log_event("📜 يوم %d: خطاب تشجيعي — سخط −15." % day)
-			_toast("خطاب المجلس رفع الأمل وخفّض السخط.", 4.0)
-			lyr3.queue_free()
-			_refresh_ui()
-		else:
-			_toast("لا تملك 5 دنانير.")
-	, Vector2(190, 70), 16, Color("#4a6a9a")))
-	vb.add_child(_button("إغلاق", layer.queue_free.bind(), Vector2(0, 54), 20))
 
 
-func _upgrade_pressed() -> void:
-	if inspected == null or not inspected.done:
-		return
-	var def: Dictionary = BUILDINGS[inspected.type]
-	if not def.has("upgrade") or inspected.upgrade_level > 0:
-		return
-	var upg: Dictionary = def["upgrade"]
-	for r in upg.get("cost", {}):
-		if float(resources.get(r, 0.0)) < float(upg["cost"][r]):
-			_toast("مواد غير كافية للترقية — تحتاج: %d %s" % [int(upg["cost"][r]), RES_AR.get(r, r)])
-			return
-	for r in upg.get("cost", {}):
-		resources[r] = float(resources[r]) - float(upg["cost"][r])
-	inspected.upgrade_level = 1
-	for s in sources:
-		if s.building == inspected:
-			if upg.has("gather_yield"):
-				s.yield_amt = float(upg["gather_yield"])
-			if upg.has("gather_slots"):
-				s.slots = int(upg["gather_slots"])
-	_toast("ترقية «%s» → «%s» اكتملت!" % [def["ar"], str(upg.get("ar", ""))])
-	_add_xp(20.0)
-	_close_inspect()
-	_assign_tasks()
-	_refresh_ui()
 
 
-func _demolish_pressed() -> void:
-	if inspected == null:
-		return
-	var b := inspected
-	var def: Dictionary = BUILDINGS[b.type]
-	if b.done and int(def["housing"]) > 0 and survivors.size() > _housing_capacity() - int(def["housing"]):
-		_toast("ما زال ناجون يسكنون هذا المبنى.")
-		return
-	if not demolish_armed:
-		demolish_armed = true
-		demolish_btn.text = "اضغط مرة أخرى للتأكيد"
-		return
-	var cost: Dictionary = def["cost"]
-	for r in cost:
-		resources[r] = float(resources[r]) + floorf(float(cost[r]) * 0.5)
-	for i in range(sources.size() - 1, -1, -1):
-		if sources[i].building == b:
-			sources.remove_at(i)
-	for v in survivors:
-		if v.src != null and not sources.has(v.src):
-			v.src = null
-			if v.task == "gather" and v.state != "to_store":
-				v.state = "seek"
-				v.wait = 0.0
-	var pp: Plot = plots[b.plot]
-	for cell in _cells_for(pp.gx, pp.gz, pp.cls):
-		occupied_cells.erase(cell)
-	pp.node.queue_free()
-	pp.node = null
-	pp.slab = null
-	pp.building = null
-	buildings.erase(b)
-	b.node.queue_free()
-	_toast("هُدم «%s» واستُعيد نصف المواد." % def["ar"])
-	_close_inspect()
-	_refresh_plots()
-	_assign_tasks()
-	_refresh_ui()
+
 
 
 # ---------------------------------------------------------------- days
 
+# ---------------------------------------------------------------- economy: needs, upkeep, budget
+
+const TAX_PER_HEAD := [0.0, 0.2, 0.45, 0.8]
+const TAX_DISCONTENT := [0.0, 0.0, 0.8, 2.5]
+var dinar_today: Dictionary = {}
+var army_unpaid := false
+
+
+func _add_dinar(amount: float, label: String) -> void:
+	resources["Dinar"] = float(resources.get("Dinar", 0.0)) + amount
+	dinar_today[label] = float(dinar_today.get(label, 0.0)) + amount
+
+
+func _kitchen_on() -> bool:
+	for b in buildings:
+		if b.done and b.active and bool(BUILDINGS[b.type].get("kitchen", false)):
+			return true
+	return false
+
+
+func _people_needs() -> Dictionary:
+	var n := float(survivors.size())
+	var soldiers := float(_soldier_count())
+	var food_mul := (0.75 if _kitchen_on() else 1.0) * float(SEASON_FOOD_MUL[cur_season])
+	var water_mul := float(SEASON_WATER_MUL[cur_season]) * (0.75 if policies.get("water_ration", false) else 1.0)
+	return {
+		"Food": (n * FOOD_PER_VILLAGER + soldiers * SOLDIER_FOOD) * food_mul,
+		"Water": n * WATER_PER_VILLAGER * water_mul,
+		"Wood": n * float(HEAT_WOOD[cur_season]),
+	}
+
+
+func _building_upkeep(b: Building) -> Dictionary:
+	var up: Dictionary = BUILDINGS[b.type].get("upkeep", {})
+	var out := {}
+	var f := 1.0 + 0.3 * float(b.lvl - 1)
+	for r in up:
+		out[r] = float(up[r]) * f
+	return out
+
+
+func _wages() -> float:
+	var w := 0.0
+	for v in survivors:
+		if v.unit != "":
+			w += float(UNITS[v.unit]["wage"])
+	return w
+
+
+func _compute_consumption() -> Dictionary:
+	var c := _people_needs()
+	c["Dinar"] = _wages()
+	for b in buildings:
+		if not b.done:
+			continue
+		var up := _building_upkeep(b)
+		for r in up:
+			c[r] = float(c.get(r, 0.0)) + float(up[r])
+	return c
+
+
+func _market_income() -> float:
+	var total := 0.0
+	var n := float(survivors.size())
+	for b in buildings:
+		if b.done and b.active and bool(BUILDINGS[b.type].get("market", false)):
+			var p: Plot = plots[b.plot]
+			var lv := _footprint_land_value(p.gx, p.gz, p.cls)
+			total += 0.12 * n * (1.0 + lv / 100.0) * _lvl_mult(b) * ((1.0 + ZONE_BONUS) if b.zone_bonus else 1.0)
+	return total
+
+
+func _tax_income() -> float:
+	if not council_unlocked or tax_level_idx <= 0:
+		return 0.0
+	var t := float(TAX_PER_HEAD[tax_level_idx]) * float(survivors.size() - _soldier_count())
+	if policies.get("relief", false):
+		t *= 0.5
+	return t
+
+
+# Pays people's needs, wages and building upkeep; returns {"shortage": bool, "cold": bool}.
+func _pay_daily_costs() -> Dictionary:
+	last_consumption = {}
+	unpaid_notes.clear()
+	var needs := _people_needs()
+	var shortage := false
+	for r in ["Food", "Water"]:
+		var need := float(needs[r])
+		if float(resources[r]) < need:
+			shortage = true
+		resources[r] = float(resources[r]) - need
+		last_consumption[r] = need
+	var cold := false
+	var wood_need := float(needs["Wood"])
+	if wood_need > 0.0:
+		if float(resources["Wood"]) >= wood_need:
+			resources["Wood"] = float(resources["Wood"]) - wood_need
+		else:
+			resources["Wood"] = 0.0
+			cold = true
+			unpaid_notes.append("لا حطب للتدفئة — الناجون يبردون.")
+		last_consumption["Wood"] = wood_need
+	var wages := _wages()
+	army_unpaid = false
+	if wages > 0.0:
+		if float(resources["Dinar"]) >= wages:
+			_add_dinar(-wages, "أجور الجنود")
+		else:
+			_add_dinar(-float(resources["Dinar"]), "أجور الجنود")
+			army_unpaid = true
+			unpaid_notes.append("أجور الجنود لم تُدفع كاملة — قوتهم نصفها والسخط يرتفع.")
+		last_consumption["Dinar"] = wages
+	var soft_unpaid := 0
+	for b in buildings:
+		if not b.done:
+			continue
+		var up := _building_upkeep(b)
+		if up.is_empty():
+			b.active = true
+			continue
+		var ok := true
+		for r in up:
+			if float(resources.get(r, 0.0)) < float(up[r]):
+				ok = false
+		var soft := bool(BUILDINGS[b.type].get("soft", false))
+		var was := b.active
+		if ok:
+			for r in up:
+				if r == "Dinar":
+					_add_dinar(-float(up[r]), "صيانة وخدمات")
+				else:
+					resources[r] = float(resources[r]) - float(up[r])
+				last_consumption[r] = float(last_consumption.get(r, 0.0)) + float(up[r])
+			b.active = true
+		elif soft:
+			soft_unpaid += 1
+			b.active = true
+		else:
+			b.active = false
+			var need_parts: Array[String] = []
+			for r in up:
+				need_parts.append(RES_AR[r])
+			unpaid_notes.append("«%s» متوقف — يحتاج %s." % [BUILDINGS[b.type]["ar"], "، ".join(need_parts)])
+			if was:
+				_toast("توقف «%s» لنقص %s." % [BUILDINGS[b.type]["ar"], "، ".join(need_parts)], 5.0)
+		if was != b.active:
+			for s in sources:
+				if s.building == b:
+					_apply_source_stats(s, b)
+	if soft_unpaid > 0:
+		unpaid_notes.append("%d بيوت/أسوار بلا صيانة (حجر/خشب) — المعنويات تنخفض." % soft_unpaid)
+	return {"shortage": shortage, "cold": cold, "soft_unpaid": soft_unpaid}
+
+
+# Share of people living in the camp's patched tents or in tents rather than real houses.
+func _tent_share() -> float:
+	var tent_cap := float(BASE_HOUSING)
+	var total := float(BASE_HOUSING)
+	for b in buildings:
+		var h := float(_housing_of(b))
+		total += h
+		if b.type == "Tent":
+			tent_cap += h
+	var n := float(survivors.size())
+	var in_houses := maxf(0.0, total - tent_cap)
+	return clampf((n - in_houses) / maxf(1.0, n), 0.0, 1.0)
+
+
+func _noise_penalty() -> float:
+	var noisy := ["Quarry", "Workshop", "Small Quarry", "Pen", "Olive Press", "Barracks", "Woodcutter"]
+	var pen := 0.0
+	for h in buildings:
+		if _housing_of(h) <= 0:
+			continue
+		var hp := Vector2(h.pos.x, h.pos.z)
+		for b in buildings:
+			if b.done and noisy.has(b.type) and Vector2(b.pos.x, b.pos.z).distance_to(hp) <= 170.0:
+				pen += 0.3
+	return minf(pen, 3.0)
+
+
+func _note_happy(label: String, delta: float) -> void:
+	if absf(delta) >= 0.05:
+		happiness_notes.append([label, delta])
+
+
 func _advance_day() -> void:
 	day += 1
+	happiness_notes.clear()
 	var n := float(survivors.size())
+	var morale0 := morale
 
 	# Season progression
 	season_day += 1
 	if season_day >= SEASON_DAYS:
 		season_day = 0
 		cur_season = (cur_season + 1) % 4
-		_toast("بدأ فصل جديد: %s" % SEASON_AR[cur_season], 5.0)
+		var tip := ""
+		if cur_season == 2:
+			tip = " اجمع الحطب: التدفئة تبدأ."
+		elif cur_season == 3:
+			tip = " الشتاء: كل ناجٍ يحتاج حطبًا للتدفئة."
+		elif cur_season == 1:
+			tip = " الصيف: استهلاك الماء أعلى."
+		_toast("بدأ فصل جديد: %s.%s" % [SEASON_AR[cur_season], tip], 6.0)
 		_log_event("🌿 يوم %d: بداية %s" % [day, SEASON_NAMES[cur_season]])
-	# Autumn: olive harvest bonus every 5 days
 	if cur_season == 2 and day % 5 == 0:
 		var olive_count := 0
 		for b in buildings:
-			if b.done and b.type == "Olive Grove":
-				olive_count += 1
+			if b.done and b.active and b.type == "Olive Grove":
+				olive_count += b.lvl
 		if olive_count > 0:
 			var bonus := float(olive_count) * 6.0
 			resources["Food"] = float(resources["Food"]) + bonus
 			_toast("موسم الزيتون: حصاد %d وحدة طعام إضافية! 🫒" % int(bonus), 4.0)
 
-	# CS systems — update before consumption calculations
+	# City systems
 	_update_land_value()
+	_refresh_zone_bonus()
+	var m_before := morale
 	_apply_service_coverage()
+	_note_happy("خدمات قريبة من البيوت", morale - m_before)
 	_update_demand()
 
-	# Check special buildings
+	var has_watchtower := false
+	var has_plaza := false
 	var has_mosque := false
 	var has_clinic := false
-	var has_plaza := false
 	var has_library := false
-	var has_watchtower := false
+	var has_square := false
 	for b in buildings:
-		if not b.done: continue
-		if b.type == "Mosque": has_mosque = true
-		elif b.type == "Clinic": has_clinic = true
-		elif b.type == "Plaza": has_plaza = true
-		elif b.type == "Library": has_library = true
-		elif b.type == "Watchtower": has_watchtower = true
-	# Mosque: Friday morale boost (every 7 days)
+		if not b.done or not b.active:
+			continue
+		match b.type:
+			"Mosque": has_mosque = true
+			"Clinic": has_clinic = true
+			"Plaza": has_plaza = true
+			"Library": has_library = true
+			"Watchtower": has_watchtower = true
+			"Town Square": has_square = true
 	if has_mosque and day % 7 == 0:
 		morale = minf(100.0, morale + 15.0)
-		_toast("صلاة الجمعة في الجامع — المعنويات ترتفع +15 🕌", 4.0)
-	# Plaza: small daily morale boost (global, stacks with coverage)
+		_note_happy("صلاة الجمعة", 15.0)
+		_toast("صلاة الجمعة في الجامع — المعنويات +15 🕌", 4.0)
 	if has_plaza:
-		morale = minf(100.0, morale + 3.0)
-	# Weather events (drought in summer, rain in spring/autumn)
+		morale = minf(100.0, morale + 1.5)
+		_note_happy("الساحة العامة", 1.5)
+	# Weather
 	if cur_season == 1 and day % 6 == 0 and rng.randf() < 0.45:
-		var dr_msg := "جفاف! الحرارة ترتفع — استهلاك الماء يزيد هذا اليوم. 🌵"
 		if has_watchtower:
-			dr_msg = "برج المراقبة رصد موجة حر مبكرًا — استعد للجفاف! 🏰"
-			_toast(dr_msg, 5.0)
+			_toast("برج المراقبة رصد موجة حر مبكرًا — خُزّن الماء في الظل. 🏰", 5.0)
 		else:
 			resources["Water"] = maxf(0.0, float(resources["Water"]) - n * 0.6)
-			_toast(dr_msg, 5.0)
+			_toast("جفاف! موجة حر بخّرت جزءًا من الماء. 🌵", 5.0)
 		_log_event("☀ يوم %d: موجة حر وجفاف." % day)
-	elif (cur_season == 0 or cur_season == 2) and day % 8 == 0 and rng.randf() < 0.35:
+	elif (cur_season == 0 or cur_season == 2 or cur_season == 3) and day % 8 == 0 and rng.randf() < 0.4:
 		var rain := 12.0 + rng.randf() * 10.0
 		resources["Water"] = float(resources["Water"]) + rain
-		_toast("أمطار ربيعية — ملأت الآبار (+%d ماء) 💧" % int(rain), 4.0)
+		_toast("أمطار — امتلأت الجرار (+%d ماء) 💧" % int(rain), 4.0)
 		_log_event("🌧 يوم %d: أمطار (+%d ماء)." % [day, int(rain)])
-	# Kitchen reduces food consumption by 25% if built
-	var food_mul: float = (0.75 if kitchen_active else 1.0) * float(SEASON_FOOD_MUL[cur_season])
-	resources["Food"] = float(resources["Food"]) - n * FOOD_PER_VILLAGER * food_mul
-	resources["Water"] = float(resources["Water"]) - n * WATER_PER_VILLAGER * float(SEASON_WATER_MUL[cur_season])
-	# Winter illness risk
+
+	# Daily costs: food, water, heating, wages, building upkeep
+	var paid := _pay_daily_costs()
+	var shortage: bool = paid["shortage"]
+	var cold: bool = paid["cold"]
+	if cold:
+		health = maxf(0.0, health - 3.0)
+		morale = maxf(0.0, morale - 3.0)
+		_note_happy("البرد (لا حطب)", -3.0)
+	if int(paid["soft_unpaid"]) > 0:
+		var sp := minf(3.0, 0.4 * float(paid["soft_unpaid"]))
+		morale = maxf(0.0, morale - sp)
+		_note_happy("بيوت بلا صيانة", -sp)
+	if army_unpaid:
+		discontent = minf(100.0, discontent + 1.5)
+	var noise := _noise_penalty()
+	if noise > 0.0:
+		morale = maxf(0.0, morale - noise)
+		_note_happy("ضجيج قرب البيوت", -noise)
 	if cur_season == 3 and rng.randf() < 0.12:
 		health = maxf(0.0, health - 5.0)
-		if not paused:
-			_toast("برد الشتاء أضعف بعض الناجين. (صحة −5)", 4.0)
-	var shortage := float(resources["Food"]) < 0.0 or float(resources["Water"]) < 0.0
+		_toast("برد الشتاء أضعف بعض الناجين. (صحة −5)", 4.0)
 	for r in RES_NAMES:
 		resources[r] = maxf(0.0, float(resources[r]))
 	last_income = income_today.duplicate()
@@ -3244,39 +4432,52 @@ func _advance_day() -> void:
 	for r in income_today:
 		income_today[r] = 0.0
 
-	# Production buildings generate a small daily Dinar income
+	# Dinar income
 	var prod_types := ["Farm", "Olive Grove", "Pen", "Quarry", "Workshop", "Fishing Dock", "Olive Press"]
 	var prod_income := 0.0
 	for b in buildings:
-		if b.done and prod_types.has(b.type):
-			prod_income += 0.5
+		if b.done and b.active and prod_types.has(b.type):
+			prod_income += 0.3
 	if prod_income > 0.0:
-		resources["Dinar"] = float(resources["Dinar"]) + prod_income
+		_add_dinar(prod_income, "بيع الفائض محليًا")
+	var mk := _market_income()
+	if mk > 0.0:
+		_add_dinar(mk, "السوق")
+	var tax := _tax_income()
+	if tax > 0.0:
+		_add_dinar(tax, "الضرائب")
+		discontent = minf(100.0, discontent + float(TAX_DISCONTENT[tax_level_idx]))
 
-	# Tax income (requires council_unlocked)
-	if council_unlocked and tax_level_idx > 0:
-		var tax: Dictionary = TAX_LEVELS[tax_level_idx]
-		resources["Dinar"] = float(resources["Dinar"]) + float(tax["dinar"])
-		discontent = minf(100.0, discontent + float(tax["discontent"]))
+	# Policies
+	if policies.get("water_ration", false):
+		morale = maxf(0.0, morale - 0.6)
+		_note_happy("سياسة تقنين المياه", -0.6)
+	if policies.get("long_shifts", false):
+		health = maxf(0.0, health - 0.6)
+	if policies.get("militia", false):
+		discontent = minf(100.0, discontent + 0.4)
+	if policies.get("relief", false):
+		discontent = maxf(0.0, discontent - 0.5)
 
-	# Regen finite natural sources
+	# Natural regrowth
+	var regen_mul := 2.0 if policies.get("forest_care", false) else 1.0
 	for s in sources:
 		if s.regen > 0.0 and not s.infinite:
-			s.amount = minf(s.max_amount, s.amount + s.max_amount * s.regen)
+			var rm := regen_mul if s.res == "Wood" else 1.0
+			s.amount = minf(s.max_amount, s.amount + s.max_amount * s.regen * rm)
 			_update_source_visual(s)
 
 	var medics := 0
 	for v in survivors:
-		if v.skill == "Medicine":
+		if v.skill == "Medicine" and v.unit == "":
 			medics += 1
-
-	# Check exploration completion
 	if exploring and day >= explore_done_day:
 		exploring = false
 		_finish_explore()
 	if shortage:
 		health = maxf(0.0, health - 8.0)
 		morale = maxf(0.0, morale - 8.0)
+		_note_happy("نقص الطعام أو الماء", -8.0)
 		hope = maxf(0.0, hope - 5.0)
 		discontent = minf(100.0, discontent + 4.0)
 		_toast("نقص في المؤن! ضع عمالًا أكثر على الطعام والماء.", 5.0)
@@ -3287,125 +4488,99 @@ func _advance_day() -> void:
 		elif health <= 25.0:
 			_remove_villager()
 	else:
-		morale = minf(100.0, morale + 1.5)
+		morale = minf(100.0, morale + 0.6)
+		_note_happy("مؤن كافية", 0.6)
 		var base_heal := 2.0 + float(medics) + (3.0 if has_clinic else 0.0)
-		var heal_rate := base_heal * service_heal_mult
-		health = minf(100.0, health + heal_rate)
-		hope = minf(100.0, hope + 1.0)
+		health = minf(100.0, health + base_heal * service_heal_mult)
+		hope = minf(100.0, hope + (0.6 if hope < 65.0 else 0.1))
 		discontent = maxf(0.0, discontent - 0.5)
-		var xp_mul := (2.0 if has_library else 1.0) * service_xp_mult
-		_add_xp(3.0 * xp_mul)
+		_add_xp(DAY_XP * (2.0 if has_library else 1.0) * service_xp_mult)
 
-	# Hope/discontent swing morale
-	morale = clampf(morale + (hope - 50.0) * 0.02 - discontent * 0.03, 0.0, 100.0)
+	morale = maxf(0.0, morale - 1.0)
+	_note_happy("قسوة الحياة بعد الكارثة", -1.0)
+	var cap_now := float(_housing_capacity())
+	if float(survivors.size()) > cap_now * 0.9:
+		morale = maxf(0.0, morale - 1.2)
+		_note_happy("اكتظاظ المساكن", -1.2)
+	var tent_share := _tent_share()
+	if tent_share > 0.0:
+		morale = maxf(0.0, morale - 1.2 * tent_share)
+		_note_happy("العيش في الخيام", -1.2 * tent_share)
+	var swing := clampf((hope - 50.0) * 0.02, -0.6, 0.6) - discontent * 0.03
+	morale = clampf(morale + swing, 0.0, 100.0)
+	_note_happy("الأمل والسخط", swing)
+	if tax > 0.0:
+		_note_happy("الضرائب (سخط)", -float(TAX_DISCONTENT[tax_level_idx]) * 0.03)
 
 	if survivors.is_empty():
 		_trigger_game_over()
 		return
 
-	# Caravan arrives every CARAVAN_INTERVAL days after CARAVAN_FIRST_DAY
+	# Trade, contracts, requests, caravan
+	_trade_day()
 	if day >= CARAVAN_FIRST_DAY and (day - CARAVAN_FIRST_DAY) % CARAVAN_INTERVAL == 0:
 		_trigger_caravan()
 
-	# Random moral event every 7+ days (cooldown)
+	# Army: raids and expeditions
+	_army_day(has_watchtower)
+
+	# Random moral event (cooldown)
 	if event_cooldown > 0:
 		event_cooldown -= 1
-	elif rng.randf() < 0.35 and MORAL_EVENTS.size() > 0:
+	elif rng.randf() < 0.3 and MORAL_EVENTS.size() > 0 and not _modal_open():
 		pending_event = rng.randi() % MORAL_EVENTS.size()
 		_show_moral_event()
 		event_cooldown = 7
 
-	var fed := float(resources["Food"]) >= n * 3.0 and float(resources["Water"]) >= n * 3.0
-	# Demand: good services → newcomers arrive more often; high service demand → slower arrival
-	var newcomer_interval := 4
+	# Newcomers: services and the town square attract people (CS demand)
+	var cons := _people_needs()
+	var fed := float(resources["Food"]) >= float(cons["Food"]) * 3.0 and float(resources["Water"]) >= float(cons["Water"]) * 3.0
+	var interval := 4
 	if demand_services < 25.0:
-		newcomer_interval = 3   # excellent services — attract newcomers faster
+		interval = 3
 	elif demand_services > 70.0:
-		newcomer_interval = 6   # poor services — newcomers hesitate
-	if day % newcomer_interval == 0 and _housing_capacity() > survivors.size() and morale > 45.0 and fed and not shortage:
-		var v := _add_villager(NAMES[survivors.size() % NAMES.size()], SKILLS[rng.randi() % SKILLS.size()])
-		_add_xp(15.0)
-		_toast("وصل ناجٍ جديد: %s (%s). امنحه عملًا." % [v.vname, SKILL_AR[v.skill]], 5.0)
-		_log_event("👤 يوم %d: وصل %s (%s)." % [day, v.vname, SKILL_AR[v.skill]])
-	elif day % newcomer_interval == 0 and _housing_capacity() <= survivors.size():
-		_toast("ناجون يطلبون اللجوء، لكن لا مأوى. ابنِ خيمة.", 4.0)
+		interval = 6
+	if has_square:
+		interval = maxi(2, interval - 1)
+	if day % interval == 0:
+		if _housing_capacity() > survivors.size() and morale > 45.0 and fed and not shortage:
+			var v := _add_villager(_new_name(), SKILLS[rng.randi() % SKILLS.size()])
+			_add_xp(15.0)
+			_toast("وصل ناجٍ جديد: %s (%s). امنحه عملًا." % [v.vname, SKILL_AR[v.skill]], 5.0)
+			_log_event("👤 يوم %d: وصل %s (%s)." % [day, v.vname, SKILL_AR[v.skill]])
+		elif _housing_capacity() <= survivors.size():
+			_toast("ناجون يطلبون اللجوء، لكن لا مأوى. ابنِ بيتًا.", 4.0)
 	peak_pop = maxi(peak_pop, survivors.size())
+	budget_lines.clear()
+	for k in dinar_today:
+		budget_lines.append([k, float(dinar_today[k])])
+	dinar_today.clear()
+	_note_happy("المجموع", morale - morale0)
 	_check_goals()
 	_assign_tasks()
 	_refresh_ui()
+	if is_instance_valid(economy_sheet) and economy_sheet.visible:
+		_refresh_economy_sheet()
+	if is_instance_valid(army_sheet) and army_sheet.visible:
+		_refresh_army_sheet()
+	if is_instance_valid(villages_sheet) and villages_sheet.visible:
+		_refresh_villages_sheet()
 
 
-func _trigger_caravan() -> void:
-	_toast("وصلت القافلة! لديك 3 أيام للتجارة قبل رحيلها.", 7.0)
-	_log_event("🐪 يوم %d: وصلت القافلة." % day)
-	_spawn_caravan_visual()
-	# Auto-trade Oil surplus
-	var oil := float(resources.get("Oil", 0.0))
-	if oil >= 10.0:
-		var sold := floorf(oil * 0.5)
-		var earned := sold * 2.0
-		resources["Oil"] = oil - sold
-		resources["Dinar"] = float(resources["Dinar"]) + earned
-		_toast("القافلة اشترت %d وحدة زيت بـ%d دينار." % [int(sold), int(earned)], 5.0)
-		_add_xp(10.0)
-	caravan_day = day
+func _new_name() -> String:
+	var used := {}
+	for v in survivors:
+		used[v.vname] = true
+	for nm in NAMES:
+		if not used.has(nm):
+			return nm
+	return "%s %d" % [NAMES[rng.randi() % NAMES.size()], survivors.size()]
 
 
-func _show_moral_event() -> void:
-	if pending_event < 0 or pending_event >= MORAL_EVENTS.size():
-		return
-	var ev: Dictionary = MORAL_EVENTS[pending_event]
-	# Build a simple dialog panel
-	var layer := CanvasLayer.new()
-	layer.layer = 20
-	add_child(layer)
-	var bg := ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.6)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(bg)
-	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.custom_minimum_size = Vector2(520, 0)
-	panel.layout_direction = Control.LAYOUT_DIRECTION_RTL
-	layer.add_child(panel)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 14)
-	panel.add_child(vb)
-	var lbl := Label.new()
-	lbl.text = ev["text"]
-	lbl.add_theme_font_override("font", ar_font)
-	lbl.add_theme_font_size_override("font_size", 17)
-	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	vb.add_child(lbl)
-	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", 10)
-	vb.add_child(hb)
-	var btn_a := Button.new()
-	btn_a.text = ev["a"]
-	btn_a.add_theme_font_override("font", ar_font)
-	btn_a.add_theme_font_size_override("font_size", 15)
-	btn_a.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hb.add_child(btn_a)
-	var btn_b := Button.new()
-	btn_b.text = ev["b"]
-	btn_b.add_theme_font_override("font", ar_font)
-	btn_b.add_theme_font_size_override("font_size", 15)
-	btn_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hb.add_child(btn_b)
-	var eff_a: String = ev["effect_a"]
-	var eff_b: String = ev["effect_b"]
-	btn_a.pressed.connect(func():
-		_log_event("⚖ يوم %d: %s" % [day, ev["a"]])
-		_apply_moral_effect(eff_a)
-		layer.queue_free()
-	)
-	btn_b.pressed.connect(func():
-		_log_event("⚖ يوم %d: %s" % [day, ev["b"]])
-		_apply_moral_effect(eff_b)
-		layer.queue_free()
-	)
-	pending_event = -1
+
+
+
+
 
 
 func _apply_moral_effect(eff: String) -> void:
@@ -3511,8 +4686,7 @@ func _on_tap(pos: Vector2) -> void:
 	if hit == null:
 		return
 	var hp: Vector3 = hit
-	if road_mode:
-		_paint_trail_at(pos)
+	if plan_mode != "":
 		return
 	if selected_building != "":
 		_update_ghost_placement(hp)
@@ -3550,156 +4724,10 @@ func _on_tap(pos: Vector2) -> void:
 
 # ---------------------------------------------------------------- save / load
 
-func _write_save(path: String, silent: bool) -> void:
-	var blist: Array = []
-	for b in buildings:
-		var pp: Plot = plots[b.plot] if b.plot >= 0 and b.plot < plots.size() else null
-		var entry := {"type": b.type, "gx": pp.gx if pp else 0, "gz": pp.gz if pp else 0, "progress": b.progress, "done": b.done, "upgrade": b.upgrade_level}
-		blist.append(entry)
-	var vlist: Array = []
-	for v in survivors:
-		vlist.append([v.vname, v.skill])
-	var amounts: Array = []
-	for s in sources:
-		if s.building == null:
-			amounts.append(s.amount)
-	var data := {
-		"version": SAVE_VERSION, "region": "Haifa", "resources": resources, "jobs": jobs, "day": day,
-		"morale": morale, "health": health, "hope": hope, "discontent": discontent,
-		"council_unlocked": council_unlocked, "tax_level_idx": tax_level_idx,
-		"kitchen_active": kitchen_active, "event_cooldown": event_cooldown,
-		"discovered_villages": discovered_villages, "exploring": exploring,
-		"explore_done_day": explore_done_day, "event_log": event_log,
-		"goal": goal_index, "peak": peak_pop, "level": level, "xp": xp,
-		"workers_opened": workers_opened, "buildings": blist, "villagers": vlist, "sources": amounts,
-		"cur_season": cur_season, "season_day": season_day
-	}
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
-		if not silent:
-			_toast("تعذّر حفظ الملف.")
-		return
-	file.store_string(JSON.stringify(data))
-	if not silent:
-		_toast("حُفظ المخيم على هذا الجهاز.")
 
 
-func _load_game(path: String) -> void:
-	if not FileAccess.file_exists(path):
-		_toast("لا يوجد حفظ هنا بعد.")
-		return
-	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		_toast("تعذّر قراءة ملف الحفظ.")
-		return
-	var parsed: Variant = JSON.parse_string(file.get_as_text())
-	if typeof(parsed) != TYPE_DICTIONARY:
-		_toast("ملف الحفظ تالف.")
-		return
-	var d: Dictionary = parsed
-	var save_ver := int(d.get("version", 0))
-	if str(d.get("region", "")) != "Haifa" or save_ver < SAVE_VERSION:
-		_toast("هذا الحفظ من إصدار أقدم (v2.2.0+)، سيبدأ مخيم جديد.")
-		return
-	_cancel_placement()
-	_close_inspect()
-	for b in buildings:
-		b.node.queue_free()
-	buildings.clear()
-	for p in plots:
-		if is_instance_valid(p.node):
-			p.node.queue_free()
-	plots.clear()
-	occupied_cells.clear()
-	for i in range(sources.size() - 1, -1, -1):
-		if sources[i].building != null:
-			sources.remove_at(i)
-	for v in survivors:
-		v.node.queue_free()
-	survivors.clear()
-	var saved_res: Dictionary = d.get("resources", {})
-	for r in RES_NAMES:
-		resources[r] = float(saved_res.get(r, resources[r]))
-	var saved_jobs: Dictionary = d.get("jobs", {})
-	for r in START_JOBS:
-		jobs[r] = int(saved_jobs.get(r, 0))
-	day = int(d.get("day", day))
-	morale = float(d.get("morale", morale))
-	health = float(d.get("health", health))
-	hope = float(d.get("hope", 50.0))
-	discontent = float(d.get("discontent", 0.0))
-	council_unlocked = bool(d.get("council_unlocked", false))
-	tax_level_idx = clampi(int(d.get("tax_level_idx", 0)), 0, TAX_LEVELS.size() - 1)
-	kitchen_active = bool(d.get("kitchen_active", false))
-	event_cooldown = int(d.get("event_cooldown", 0))
-	discovered_villages.clear()
-	var dv: Array = d.get("discovered_villages", [])
-	for vi in dv:
-		var vi_int := int(vi)
-		if vi_int >= 0 and vi_int < VILLAGES.size() and not discovered_villages.has(vi_int):
-			discovered_villages.append(vi_int)
-	exploring = bool(d.get("exploring", false))
-	explore_done_day = int(d.get("explore_done_day", -1))
-	event_log.clear()
-	var el: Array = d.get("event_log", [])
-	for entry in el:
-		event_log.append(str(entry))
-	goal_index = clampi(int(d.get("goal", 0)), 0, GOALS.size())
-	peak_pop = int(d.get("peak", START_POP))
-	level = clampi(int(d.get("level", 1)), 1, MAX_LEVEL)
-	xp = float(d.get("xp", 0.0))
-	workers_opened = bool(d.get("workers_opened", false))
-	cur_season = clampi(int(d.get("cur_season", 0)), 0, 3)
-	season_day = clampi(int(d.get("season_day", 0)), 0, SEASON_DAYS - 1)
-	day_timer = 0.0
-	var amounts: Array = d.get("sources", [])
-	var idx := 0
-	for s in sources:
-		if s.building == null:
-			if idx < amounts.size():
-				s.amount = float(amounts[idx])
-				_update_source_visual(s)
-			idx += 1
-	var blist: Array = d.get("buildings", [])
-	for e in blist:
-		if typeof(e) != TYPE_DICTIONARY:
-			continue
-		var ed: Dictionary = e
-		var t := str(ed.get("type", ""))
-		if not BUILDINGS.has(t):
-			continue
-		var gx_b := int(ed.get("gx", 0))
-		var gz_b := int(ed.get("gz", 0))
-		var cls_b := str(BUILDINGS[t]["cls"])
-		# Skip if cells already occupied
-		if not _can_place(gx_b, gz_b, cls_b, t):
-			continue
-		var new_p := _create_dynamic_plot(gx_b, gz_b, cls_b)
-		var new_b := _spawn_building(t, new_p.idx, float(ed.get("progress", 1.0)), bool(ed.get("done", true)))
-		new_b.upgrade_level = int(ed.get("upgrade", 0))
-		if new_b.upgrade_level > 0 and new_b.done and BUILDINGS[t].has("upgrade"):
-			var upg: Dictionary = BUILDINGS[t]["upgrade"]
-			for s in sources:
-				if s.building == new_b:
-					if upg.has("gather_yield"):
-						s.yield_amt = float(upg["gather_yield"])
-					if upg.has("gather_slots"):
-						s.slots = int(upg["gather_slots"])
-	var vlist: Array = d.get("villagers", [])
-	for e in vlist:
-		if typeof(e) == TYPE_ARRAY and e.size() >= 2 and SKILL_COLORS.has(str(e[1])):
-			_add_villager(str(e[0]), str(e[1]))
-	if survivors.is_empty():
-		for i in range(START_POP):
-			_add_villager(NAMES[i], SKILLS[i % SKILLS.size()])
-	_clamp_jobs()
-	game_over = false
-	over_layer.visible = false
-	_refresh_plots()
-	_assign_tasks()
-	_refresh_ui()
-	_close_menu()
-	_toast("تم تحميل المخيم.")
+
+
 
 
 # ---------------------------------------------------------------- shared helpers (from v0.3)
@@ -3950,7 +4978,14 @@ func _update_camera() -> void:
 func _build_lighting() -> void:
 	sun_node = DirectionalLight3D.new()
 	sun_node.rotation_degrees = Vector3(-48, -35, 0)
-	sun_node.light_energy = 1.15
+	sun_node.light_energy = 1.0
+	sun_node.light_color = Color("#fff1dc")
+	sun_node.shadow_enabled = shadows_on
+	sun_node.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun_node.directional_shadow_max_distance = 7000.0
+	sun_node.shadow_bias = 0.06
+	sun_node.shadow_normal_bias = 1.2
+	sun_node.shadow_opacity = 0.75
 	add_child(sun_node)
 	var env_node := WorldEnvironment.new()
 	world_env = Environment.new()
@@ -3958,7 +4993,7 @@ func _build_lighting() -> void:
 	world_env.background_color = Color("#9cc3d5")
 	world_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	world_env.ambient_light_color = Color("#b9c6c2")
-	world_env.ambient_light_energy = 0.75
+	world_env.ambient_light_energy = 0.5
 	env_node.environment = world_env
 	add_child(env_node)
 
@@ -3969,7 +5004,7 @@ func _sum_jobs() -> int:
 	return n
 
 func _clamp_jobs() -> void:
-	while _sum_jobs() > survivors.size():
+	while _sum_jobs() > _worker_count():
 		var worst := ""
 		var most := -1
 		for r in jobs:
@@ -4186,7 +5221,7 @@ func _move(v: Villager, dt: float, bob: bool = false) -> bool:
 	var hop := 0.0
 	var arrived := dist <= 3.0
 	if not arrived:
-		var step := minf(dist, WALK_SPEED * dt)
+		var step := minf(dist, WALK_SPEED * dt * _speed_at(flat))
 		flat += (g - flat).normalized() * step
 		v.phase += dt * 12.0
 		hop = absf(sin(v.phase)) * 5.0
@@ -4216,6 +5251,12 @@ func _update_villagers(dt: float) -> void:
 						v.wait = rng.randf_range(2.0, 5.0)
 			"gather":
 				_tick_gather(v, dt)
+			"guard":
+				if not v.away and _move(v, dt):
+					v.wait -= dt
+					if v.wait <= 0.0:
+						v.goal = _patrol_point()
+						v.wait = rng.randf_range(3.0, 7.0)
 
 func _tick_gather(v: Villager, dt: float) -> void:
 	match v.state:
@@ -4247,7 +5288,7 @@ func _tick_gather(v: Villager, dt: float) -> void:
 				v.wait = 0.0
 				return
 			_move(v, dt, true)
-			v.timer -= dt
+			v.timer -= dt * (1.25 if policies.get("long_shifts", false) else 1.0)
 			if v.timer <= 0.0:
 				_finish_gather(v)
 		"to_store":
@@ -4259,6 +5300,8 @@ func _tick_gather(v: Villager, dt: float) -> void:
 func _finish_gather(v: Villager) -> void:
 	var s := v.src
 	var take := s.yield_amt
+	if s.res == "Wood" and s.building == null and policies.get("forest_care", false):
+		take *= 0.85
 	if not s.infinite:
 		take = minf(take, s.amount)
 		s.amount -= take
@@ -4308,6 +5351,7 @@ func _process(delta: float) -> void:
 				return
 		_update_construction(dt)
 		_update_villagers(dt)
+		_update_raid(dt)
 		assign_timer += delta
 		if assign_timer >= 1.0:
 			assign_timer = 0.0
@@ -4325,11 +5369,11 @@ func _process(delta: float) -> void:
 	# Day/night ambient light follows day progress
 	if is_instance_valid(world_env) and not paused:
 		var t := day_timer / DAY_LENGTH
-		var day_energy := 1.15 + 0.2 * sin(t * PI)
+		var day_energy := 0.92 + 0.16 * sin(t * PI)
 		if is_instance_valid(sun_node):
 			sun_node.light_energy = day_energy
 		var season_sky: Color = SEASON_SKY[cur_season]
-		var amb: Color = season_sky.lerp(Color("#4a5a7a"), (1.0 - sin(t * PI)) * 0.5)
+		var amb: Color = season_sky.darkened(0.12).lerp(Color("#4a5a7a"), (1.0 - sin(t * PI)) * 0.45)
 		world_env.ambient_light_color = amb
 	# Crisis overlay pulse
 	if is_instance_valid(crisis_overlay) and crisis_overlay.visible:
@@ -4340,6 +5384,7 @@ func _process(delta: float) -> void:
 		caravan_timer += delta
 		var cx := camp_pos.x + 800.0 - caravan_timer * 40.0
 		caravan_node.position.x = cx
+		caravan_node.position.y = _height_at_world(cx, caravan_node.position.z)
 		if caravan_timer > 40.0 or cx < camp_pos.x - 900.0:
 			caravan_node.queue_free()
 			caravan_node = null
@@ -4348,19 +5393,17 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if menu_open or game_over:
 		return
+	var touch_dev := DisplayServer.is_touchscreen_available()
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			touches[event.index] = event.position
-			drag_in_sheet = is_instance_valid(build_sheet) and build_sheet.visible \
-				and build_sheet.get_global_rect().has_point(event.position)
+			if plan_mode != "" and touches.size() == 1:
+				_paint_at(event.position)
 		else:
 			touches.erase(event.index)
-			if touches.is_empty():
-				drag_in_sheet = false
 		if touches.size() >= 2:
 			pinch_last = _pinch_distance()
 			drag_moved = true
-			drag_in_sheet = false
 		return
 	if event is InputEventScreenDrag:
 		touches[event.index] = event.position
@@ -4369,14 +5412,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			if pinch_last > 0.0 and d > 0.0:
 				_zoom(pinch_last / d)
 			pinch_last = d
+			_pan_camera(event.relative * 0.5)
 			return
-		if road_mode and touches.size() == 1:
-			_paint_trail_at(event.position)
-			return
-		if drag_in_sheet and is_instance_valid(build_scroll):
-			var new_h := build_scroll.scroll_horizontal - int(event.relative.x)
-			build_scroll.scroll_horizontal = clampi(new_h, 0, 99999)
-			return
+		if plan_mode != "":
+			_paint_at(event.position)
 		return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
@@ -4390,18 +5429,25 @@ func _unhandled_input(event: InputEvent) -> void:
 				drag_active = true
 				drag_moved = false
 				press_pos = event.position
+				if plan_mode != "" and not touch_dev:
+					_paint_at(event.position)
 			else:
-				if drag_active and not drag_moved and touches.size() < 2:
+				if drag_active and not drag_moved and touches.size() < 2 and plan_mode == "":
 					_on_tap(event.position)
 				drag_active = false
 	elif event is InputEventMouseMotion:
 		if right_drag:
 			_pan_camera(event.relative)
 		elif drag_active and touches.size() < 2:
+			if plan_mode != "":
+				if not touch_dev:
+					_paint_at(event.position)
+				return
 			if event.position.distance_to(press_pos) > 14.0:
 				drag_moved = true
 			if drag_moved:
 				_pan_camera(event.relative)
+
 
 func _pinch_distance() -> float:
 	var pts: Array = touches.values()
@@ -4467,19 +5513,10 @@ func _save_game() -> void:
 func _trend_arrow(res: String) -> String:
 	if res_trend_history.size() < 2:
 		return ""
+	var use := float(_compute_consumption().get(res, 0.0))
 	var recent: Dictionary = res_trend_history[res_trend_history.size() - 1]
 	var prev: Dictionary = res_trend_history[res_trend_history.size() - 2]
-	var n := float(survivors.size())
-	var net_recent := float(recent.get(res, 0.0))
-	var net_prev := float(prev.get(res, 0.0))
-	if res == "Food":
-		var mul := 0.75 if kitchen_active else 1.0
-		net_recent -= n * FOOD_PER_VILLAGER * mul
-		net_prev -= n * FOOD_PER_VILLAGER * mul
-	elif res == "Water":
-		net_recent -= n * WATER_PER_VILLAGER
-		net_prev -= n * WATER_PER_VILLAGER
-	var avg := (net_recent + net_prev) * 0.5
+	var avg := (float(recent.get(res, 0.0)) + float(prev.get(res, 0.0))) * 0.5 - use
 	if avg > 0.5:
 		return "▲"
 	elif avg < -0.5:
@@ -4536,27 +5573,296 @@ func _has_building(type: String) -> bool:
 	return false
 
 
+# ---------------------------------------------------------------- trade: relations, prices, contracts
+
+var caravan_deals: Array = []     # {"kind": "buy"/"sell", "res", "qty", "dinar", "left"}
+var caravan_until := -1
+
+
+func _vstate(idx: int) -> Dictionary:
+	if not village_state.has(idx):
+		village_state[idx] = {"rel": 30.0, "used": {}}
+	return village_state[idx]
+
+
+func _trade_bonus() -> float:
+	var t := 0.0
+	for b in buildings:
+		if b.done and b.active and BUILDINGS[b.type].has("trade_bonus"):
+			t += float(BUILDINGS[b.type]["trade_bonus"]) * _lvl_mult(b)
+	return minf(t, 0.35)
+
+
+func _stable_on() -> bool:
+	for b in buildings:
+		if b.done and b.active and bool(BUILDINGS[b.type].get("stable", false)):
+			return true
+	return false
+
+
+func _rel_ar(rel: float) -> String:
+	if rel >= 75.0:
+		return "حليف"
+	if rel >= 50.0:
+		return "صديق"
+	if rel >= 30.0:
+		return "محايد"
+	return "متحفّظ"
+
+
+func _offer_qty(item: Dictionary) -> int:
+	return int(item["qty"]) * (2 if _stable_on() else 1)
+
+
+func _buy_price(idx: int, item: Dictionary) -> int:
+	var rel := float(_vstate(idx)["rel"])
+	var p := float(item["dinar"]) * (1.3 - rel / 250.0) * (1.0 - _trade_bonus())
+	return maxi(1, int(round(p * (2.0 if _stable_on() else 1.0))))
+
+
+func _sell_price(idx: int, item: Dictionary) -> int:
+	var rel := float(_vstate(idx)["rel"])
+	var p := float(item["dinar"]) * (0.7 + rel / 250.0) * (1.0 + _trade_bonus())
+	return maxi(1, int(round(p * (2.0 if _stable_on() else 1.0))))
+
+
+func _change_rel(idx: int, delta: float) -> void:
+	var st := _vstate(idx)
+	st["rel"] = clampf(float(st["rel"]) + delta, 0.0, 100.0)
+
+
+func _do_trade(idx: int, kind: String, i: int) -> void:
+	var v: Dictionary = VILLAGES[idx]
+	var item: Dictionary = (v["sells"] if kind == "buy" else v["buys"])[i]
+	var st := _vstate(idx)
+	var key := "%s%d" % [kind, i]
+	var used: Dictionary = st["used"]
+	if int(used.get(key, 0)) >= TRADE_STOCK:
+		_toast("نفدت الكمية اليوم — عُد غدًا.")
+		return
+	var res := str(item["res"])
+	var qty := _offer_qty(item)
+	if kind == "buy":
+		var price := _buy_price(idx, item)
+		if float(resources["Dinar"]) < float(price):
+			_toast("لا تملك %d دينار." % price)
+			return
+		_add_dinar(-float(price), "مشتريات من القرى")
+		resources[res] = float(resources[res]) + float(qty)
+		_change_rel(idx, 1.5)
+		_log_event("💰 يوم %d: اشتريت %d %s من %s بـ%d." % [day, qty, RES_AR[res], v["ar"], price])
+	else:
+		var gain := _sell_price(idx, item)
+		if float(resources[res]) < float(qty):
+			_toast("لا تملك %d %s." % [qty, RES_AR[res]])
+			return
+		resources[res] = float(resources[res]) - float(qty)
+		_add_dinar(float(gain), "مبيعات للقرى")
+		_change_rel(idx, 2.0)
+		trades_done += 1
+		_log_event("💰 يوم %d: بعت %d %s لـ%s بـ%d دينار." % [day, qty, RES_AR[res], v["ar"], gain])
+	used[key] = int(used.get(key, 0)) + 1
+	_check_goals()
+	_refresh_ui()
+	_open_trade(idx)
+
+
+func _gift(idx: int) -> void:
+	var v: Dictionary = VILLAGES[idx]
+	var want: Dictionary = v["buys"][0]
+	var res := str(want["res"])
+	var amt := 10.0
+	if float(resources[res]) < amt:
+		_toast("الهدية تحتاج 10 %s." % RES_AR[res])
+		return
+	resources[res] = float(resources[res]) - amt
+	_change_rel(idx, 8.0)
+	_toast("قبلت %s هديتك — العلاقة تتحسن." % v["ar"], 3.5)
+	_refresh_ui()
+	_open_trade(idx)
+
+
+func _max_contracts() -> int:
+	var n := 0
+	for b in buildings:
+		if b.done and (b.type == "Market" or b.type == "Stable"):
+			n += 1
+	return n
+
+
+func _sign_contract(idx: int, kind: String, i: int) -> void:
+	if _max_contracts() == 0:
+		_toast("العقود تحتاج سوقًا أو إسطبلًا.")
+		return
+	if contracts.size() >= _max_contracts():
+		_toast("بلغت حد العقود (%d) — ابنِ سوقًا أو إسطبلًا إضافيًا أو ألغِ عقدًا." % _max_contracts())
+		return
+	if float(_vstate(idx)["rel"]) < 45.0:
+		_toast("العلاقة يجب أن تبلغ 45 على الأقل لتوقيع عقد.")
+		return
+	var v: Dictionary = VILLAGES[idx]
+	var item: Dictionary = (v["buys"] if kind == "export" else v["sells"])[i]
+	var qty := _offer_qty(item) * 2
+	var dinar := int(round(float(_sell_price(idx, item)) * 2.0 * 1.15)) if kind == "export" else int(round(float(_buy_price(idx, item)) * 2.0 * 0.9))
+	contracts.append({"v": idx, "kind": kind, "res": str(item["res"]), "qty": qty, "dinar": dinar, "next": day + 1})
+	contracts_signed += 1
+	_toast("وُقّع عقد %s مع %s: %d %s كل %d أيام مقابل %d دينار." % ["تصدير" if kind == "export" else "استيراد", v["ar"], qty, RES_AR[item["res"]], CONTRACT_EVERY, dinar], 6.0)
+	_log_event("📜 يوم %d: عقد مع %s." % [day, v["ar"]])
+	_check_goals()
+	_open_trade(idx)
+
+
+func _cancel_contract(ci: int) -> void:
+	if ci < 0 or ci >= contracts.size():
+		return
+	var c: Dictionary = contracts[ci]
+	_change_rel(int(c["v"]), -4.0)
+	contracts.remove_at(ci)
+	_toast("أُلغي العقد (العلاقة −4).")
+	_open_trade(int(c["v"]))
+
+
+func _trade_day() -> void:
+	for idx in village_state:
+		var st: Dictionary = village_state[idx]
+		st["used"] = {}
+		if float(st["rel"]) > 25.0:
+			st["rel"] = float(st["rel"]) - 0.15
+	for c in contracts:
+		if day < int(c["next"]):
+			continue
+		c["next"] = day + CONTRACT_EVERY
+		var vname := str(VILLAGES[int(c["v"])]["ar"])
+		var res := str(c["res"])
+		if c["kind"] == "export":
+			if float(resources[res]) >= float(c["qty"]):
+				resources[res] = float(resources[res]) - float(c["qty"])
+				_add_dinar(float(c["dinar"]), "عقود تجارية")
+				_change_rel(int(c["v"]), 1.0)
+				_log_event("🐫 يوم %d: سُلّم عقد %s (+%d دينار)." % [day, vname, int(c["dinar"])])
+			else:
+				_change_rel(int(c["v"]), -6.0)
+				_toast("فشل تسليم عقد %s: ينقص %s (العلاقة −6)." % [vname, RES_AR[res]], 5.0)
+		else:
+			if float(resources["Dinar"]) >= float(c["dinar"]):
+				_add_dinar(-float(c["dinar"]), "عقود تجارية")
+				resources[res] = float(resources[res]) + float(c["qty"])
+				_change_rel(int(c["v"]), 1.0)
+				_log_event("🐫 يوم %d: وصلت شحنة %s (%d %s)." % [day, vname, int(c["qty"]), RES_AR[res]])
+			else:
+				_change_rel(int(c["v"]), -6.0)
+				_toast("لم تدفع ثمن شحنة %s (العلاقة −6)." % vname, 5.0)
+		_spawn_caravan_visual(true)
+	for i in range(requests.size() - 1, -1, -1):
+		var rq: Dictionary = requests[i]
+		if day > int(rq["until"]):
+			_change_rel(int(rq["v"]), -6.0)
+			_toast("انتهت مهلة طلب %s (العلاقة −6)." % VILLAGES[int(rq["v"])]["ar"], 4.0)
+			requests.remove_at(i)
+	if requests.is_empty() and not discovered_villages.is_empty() and day % 7 == 3:
+		var vi: int = discovered_villages[rng.randi() % discovered_villages.size()]
+		var want: Array = VILLAGES[vi]["buys"]
+		var item: Dictionary = want[rng.randi() % want.size()]
+		var qty := 12 + rng.randi() % 16
+		requests.append({"v": vi, "res": str(item["res"]), "qty": qty, "reward": int(qty * 0.9) + 4, "until": day + 5})
+		_toast("طلب من %s: يحتاجون %d %s خلال 5 أيام. افتح «القرى»." % [VILLAGES[vi]["ar"], qty, RES_AR[item["res"]]], 6.0)
+	if caravan_until >= 0 and day > caravan_until:
+		caravan_until = -1
+		caravan_deals.clear()
+
+
+func _fulfill_request(i: int) -> void:
+	if i < 0 or i >= requests.size():
+		return
+	var rq: Dictionary = requests[i]
+	var res := str(rq["res"])
+	if float(resources[res]) < float(rq["qty"]):
+		_toast("تحتاج %d %s." % [int(rq["qty"]), RES_AR[res]])
+		return
+	resources[res] = float(resources[res]) - float(rq["qty"])
+	_add_dinar(float(rq["reward"]), "مكافآت الطلبات")
+	_change_rel(int(rq["v"]), 12.0)
+	_add_xp(15.0)
+	_toast("سلّمت الطلب لـ%s: +%d دينار والعلاقة +12." % [VILLAGES[int(rq["v"])]["ar"], int(rq["reward"])], 4.0)
+	requests.remove_at(i)
+	_refresh_ui()
+	_refresh_villages_sheet()
+
+
+func _trigger_caravan() -> void:
+	_toast("وصلت قافلة التجار من الشرق! افتح «القرى» للتجارة معها (3 أيام).", 7.0)
+	_log_event("🐪 يوم %d: وصلت القافلة." % day)
+	_spawn_caravan_visual(false)
+	caravan_day = day
+	caravan_until = day + 3
+	caravan_deals.clear()
+	var pool := [
+		{"kind": "sell", "res": "Oil", "qty": 5, "dinar": 9},
+		{"kind": "sell", "res": "Food", "qty": 15, "dinar": 6},
+		{"kind": "sell", "res": "Stone", "qty": 12, "dinar": 6},
+		{"kind": "sell", "res": "Wood", "qty": 12, "dinar": 5},
+		{"kind": "buy", "res": "Scrap", "qty": 10, "dinar": 7},
+		{"kind": "buy", "res": "Oil", "qty": 6, "dinar": 8},
+		{"kind": "buy", "res": "Food", "qty": 20, "dinar": 9},
+		{"kind": "buy", "res": "Stone", "qty": 15, "dinar": 8},
+	]
+	pool.shuffle()
+	for k in range(4):
+		var d: Dictionary = pool[k].duplicate()
+		d["left"] = 2
+		caravan_deals.append(d)
+
+
+func _caravan_trade(i: int) -> void:
+	var d: Dictionary = caravan_deals[i]
+	if int(d["left"]) <= 0:
+		return
+	var res := str(d["res"])
+	if d["kind"] == "sell":
+		if float(resources[res]) < float(d["qty"]):
+			_toast("لا تملك %d %s." % [int(d["qty"]), RES_AR[res]])
+			return
+		resources[res] = float(resources[res]) - float(d["qty"])
+		_add_dinar(float(d["dinar"]), "القافلة")
+		trades_done += 1
+	else:
+		if float(resources["Dinar"]) < float(d["dinar"]):
+			_toast("لا تملك %d دينار." % int(d["dinar"]))
+			return
+		_add_dinar(-float(d["dinar"]), "القافلة")
+		resources[res] = float(resources[res]) + float(d["qty"])
+	d["left"] = int(d["left"]) - 1
+	_check_goals()
+	_refresh_ui()
+	_refresh_villages_sheet()
+
+
+# ── villages sheet & trade dialog ──
+
 func _build_villages_sheet() -> void:
 	villages_sheet = _sheet(Control.PRESET_CENTER_BOTTOM)
 	villages_sheet.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	villages_sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	villages_sheet.offset_bottom = -116
 	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(660, 0)
+	box.custom_minimum_size = Vector2(820, 0)
 	box.add_theme_constant_override("separation", 10)
 	villages_sheet.add_child(box)
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 16)
 	box.add_child(header)
-	header.add_child(_label("القرى المستكشفة", 28, C_GOLD))
+	header.add_child(_label_b("القرى والتجارة", 28, C_GOLD))
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(sp)
-	explore_btn = _button("اكتشف قرية (%d دينار)" % EXPLORE_BASE_COST, _on_explore_pressed, Vector2(260, 52), 18, C_BTN)
+	explore_btn = _button("اكتشف قرية", _on_explore_pressed, Vector2(260, 52), 18, C_BTN)
 	header.add_child(explore_btn)
+	var scroll := _vscroll(380.0)
+	box.add_child(scroll)
 	villages_content = VBoxContainer.new()
 	villages_content.add_theme_constant_override("separation", 10)
-	box.add_child(villages_content)
+	villages_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(villages_content)
 
 
 func _refresh_villages_sheet() -> void:
@@ -4567,7 +5873,7 @@ func _refresh_villages_sheet() -> void:
 	var cost := EXPLORE_BASE_COST + discovered_villages.size() * EXPLORE_COST_STEP
 	if is_instance_valid(explore_btn):
 		if exploring:
-			explore_btn.text = "يستكشف... يوم %d" % explore_done_day
+			explore_btn.text = "يستكشف... يعود يوم %d" % explore_done_day
 			explore_btn.disabled = true
 		elif discovered_villages.size() >= VILLAGES.size():
 			explore_btn.text = "كل القرى مستكشفة"
@@ -4575,55 +5881,142 @@ func _refresh_villages_sheet() -> void:
 		else:
 			explore_btn.text = "اكتشف قرية (%d دينار)" % cost
 			explore_btn.disabled = false
+	var info := _label("السوق والخان يحسّنان الأسعار %d%%، والإسطبل يضاعف الكميات. العقود: %d/%d." % [int(_trade_bonus() * 100.0), contracts.size(), _max_contracts()], 16, C_MUTED)
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	villages_content.add_child(info)
+	if caravan_until >= day and not caravan_deals.is_empty():
+		var card := _card_panel(Color(0.22, 0.16, 0.06, 0.9))
+		villages_content.add_child(card)
+		var cv := VBoxContainer.new()
+		cv.add_theme_constant_override("separation", 6)
+		card.add_child(cv)
+		cv.add_child(_label_b("🐪 قافلة التجار — ترحل يوم %d" % (caravan_until + 1), 21, C_GOLD))
+		var row := HFlowContainer.new()
+		row.add_theme_constant_override("h_separation", 10)
+		row.add_theme_constant_override("v_separation", 8)
+		cv.add_child(row)
+		for i in range(caravan_deals.size()):
+			var d: Dictionary = caravan_deals[i]
+			var txt := ("بِع %d %s ← %d دينار" if d["kind"] == "sell" else "اشترِ %d %s ← %d دينار") % [int(d["qty"]), RES_AR[d["res"]], int(d["dinar"])]
+			var b := _button("%s (%d)" % [txt, int(d["left"])], _caravan_trade.bind(i), Vector2(250, 50), 16, C_GREEN if d["kind"] == "buy" else Color("#9a7a1a"))
+			b.disabled = int(d["left"]) <= 0
+			row.add_child(b)
+	for ri in range(requests.size()):
+		var rq: Dictionary = requests[ri]
+		var rrow := HBoxContainer.new()
+		rrow.add_theme_constant_override("separation", 10)
+		villages_content.add_child(rrow)
+		var rl := _label("📦 %s تطلب %d %s حتى يوم %d — مكافأة %d دينار" % [VILLAGES[int(rq["v"])]["ar"], int(rq["qty"]), RES_AR[rq["res"]], int(rq["until"]), int(rq["reward"])], 17, Color("#ffd98a"))
+		rl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		rrow.add_child(rl)
+		rrow.add_child(_button("سلّم", _fulfill_request.bind(ri), Vector2(110, 48), 18, C_GREEN))
 	if discovered_villages.is_empty():
-		villages_content.add_child(_label("أرسل مجموعة استكشاف لاكتشاف القرى المجاورة.", 19, C_MUTED))
+		villages_content.add_child(_label("أرسل مجموعة استكشاف لاكتشاف قرى الناجين المجاورة.", 19, C_MUTED))
 		return
-	var stable := _has_building("Stable")
 	for idx in discovered_villages:
 		var v: Dictionary = VILLAGES[idx]
-		var vsell: Array = v["sells"]
-		var vbox := VBoxContainer.new()
-		vbox.add_theme_constant_override("separation", 6)
-		villages_content.add_child(vbox)
-		var name_lbl := _label("🏘 %s" % str(v["ar"]), 22, C_CREAM)
-		vbox.add_child(name_lbl)
-		if stable:
-			vbox.add_child(_label("الإسطبل يضاعف الكميات", 14, Color("#a0c870")))
-		var items_row := HBoxContainer.new()
-		items_row.add_theme_constant_override("separation", 14)
-		vbox.add_child(items_row)
-		for item in vsell:
-			var item_d: Dictionary = item
-			var res: String = str(item_d["res"])
-			var qty: int = int(item_d["qty"]) * (2 if stable else 1)
-			var dinar: int = int(item_d["dinar"]) * (2 if stable else 1)
-			var col := VBoxContainer.new()
-			col.add_theme_constant_override("separation", 4)
-			var top_row := HBoxContainer.new()
-			top_row.add_theme_constant_override("separation", 5)
-			top_row.add_child(_dot(RES_COLORS[res], 11.0))
-			top_row.add_child(_label("%d %s" % [qty, RES_AR[res]], 20))
-			col.add_child(top_row)
-			var vi := idx
-			var buy_btn := _button("%d دينار" % dinar, func():
-				if float(resources.get("Dinar", 0.0)) >= float(dinar):
-					resources["Dinar"] = float(resources["Dinar"]) - float(dinar)
-					resources[res] = float(resources.get(res, 0.0)) + float(qty)
-					_log_event("💰 يوم %d: اشتريت %d %s من %s." % [day, qty, RES_AR[res], str(VILLAGES[vi]["ar"])])
-					_toast("اشتريت %d %s." % [qty, RES_AR[res]], 3.0)
-					_refresh_ui()
-				else:
-					_toast("لا تملك %d دينار." % dinar)
-			, Vector2(130, 48), 18, C_GREEN)
-			col.add_child(buy_btn)
-			items_row.add_child(col)
-		var sep2 := HSeparator.new()
-		villages_content.add_child(sep2)
+		var st := _vstate(idx)
+		var card2 := _card_panel(Color(1, 1, 1, 0.05))
+		villages_content.add_child(card2)
+		var row2 := HBoxContainer.new()
+		row2.add_theme_constant_override("separation", 12)
+		card2.add_child(row2)
+		var col := VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row2.add_child(col)
+		col.add_child(_label_b("🏘 %s" % v["ar"], 21, C_CREAM))
+		var rel_row := HBoxContainer.new()
+		rel_row.add_theme_constant_override("separation", 8)
+		col.add_child(rel_row)
+		rel_row.add_child(_label("العلاقة: %s" % _rel_ar(float(st["rel"])), 16, C_MUTED))
+		var rb := _bar(Color("#7fc04f"), 160.0, 9.0)
+		rb.value = float(st["rel"])
+		rb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		rel_row.add_child(rb)
+		var sells_txt: Array[String] = []
+		for it in v["sells"]:
+			sells_txt.append(RES_AR[it["res"]])
+		var buys_txt: Array[String] = []
+		for it2 in v["buys"]:
+			buys_txt.append(RES_AR[it2["res"]])
+		col.add_child(_label("تبيع: %s  —  تشتري: %s" % ["، ".join(sells_txt), "، ".join(buys_txt)], 16, C_CREAM))
+		row2.add_child(_button("تجارة", _open_trade.bind(idx), Vector2(130, 56), 20, C_GREEN))
+
+
+func _open_trade(idx: int) -> void:
+	_close_all_modals()
+	var v: Dictionary = VILLAGES[idx]
+	var st := _vstate(idx)
+	var body := _open_modal("تجارة مع %s" % v["ar"], 720.0)
+	body.add_child(_label("دينارك: %d  •  العلاقة: %d (%s)  •  كل عرض متاح %d مرات يوميًا" % [int(resources["Dinar"]), int(st["rel"]), _rel_ar(float(st["rel"])), TRADE_STOCK], 17, C_MUTED))
+	var used: Dictionary = st["used"]
+	body.add_child(_label_b("شراء من القرية", 20, C_GOLD))
+	for i in range(v["sells"].size()):
+		var it: Dictionary = v["sells"][i]
+		var left := TRADE_STOCK - int(used.get("buy%d" % i, 0))
+		var row := _trade_row(it, "← %d دينار" % _buy_price(idx, it), "شراء", _do_trade.bind(idx, "buy", i), C_GREEN, left)
+		body.add_child(row)
+	body.add_child(_label_b("بيع للقرية", 20, C_GOLD))
+	for i2 in range(v["buys"].size()):
+		var it2: Dictionary = v["buys"][i2]
+		var left2 := TRADE_STOCK - int(used.get("sell%d" % i2, 0))
+		body.add_child(_trade_row(it2, "→ %d دينار" % _sell_price(idx, it2), "بيع", _do_trade.bind(idx, "sell", i2), Color("#9a7a1a"), left2))
+	var g_row := HBoxContainer.new()
+	g_row.add_theme_constant_override("separation", 10)
+	body.add_child(g_row)
+	var want := str(v["buys"][0]["res"])
+	g_row.add_child(_button("هدية (10 %s، العلاقة +8)" % RES_AR[want], _gift.bind(idx), Vector2(300, 52), 17, Color("#6a4a8a")))
+	body.add_child(HSeparator.new())
+	body.add_child(_label_b("العقود التجارية (تسليم تلقائي كل %d أيام)" % CONTRACT_EVERY, 20, C_GOLD))
+	if _max_contracts() == 0:
+		body.add_child(_label("تحتاج سوقًا أو إسطبلًا لتوقيع العقود.", 17, C_MUTED))
+	elif float(st["rel"]) < 45.0:
+		body.add_child(_label("ارفع العلاقة إلى 45 بالتجارة والهدايا لتوقيع العقود.", 17, C_MUTED))
+	else:
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", 8)
+		flow.add_theme_constant_override("v_separation", 8)
+		body.add_child(flow)
+		for i3 in range(v["buys"].size()):
+			var it3: Dictionary = v["buys"][i3]
+			flow.add_child(_button("تصدير %s" % RES_AR[it3["res"]], _sign_contract.bind(idx, "export", i3), Vector2(180, 48), 16, Color("#2f6a8a")))
+		for i4 in range(v["sells"].size()):
+			var it4: Dictionary = v["sells"][i4]
+			flow.add_child(_button("استيراد %s" % RES_AR[it4["res"]], _sign_contract.bind(idx, "import", i4), Vector2(180, 48), 16, Color("#2f6a8a")))
+	for ci in range(contracts.size()):
+		var c: Dictionary = contracts[ci]
+		if int(c["v"]) != idx:
+			continue
+		var crow := HBoxContainer.new()
+		crow.add_theme_constant_override("separation", 10)
+		body.add_child(crow)
+		var cl := _label("%s %d %s ↔ %d دينار — التسليم التالي يوم %d" % ["تصدير" if c["kind"] == "export" else "استيراد", int(c["qty"]), RES_AR[c["res"]], int(c["dinar"]), int(c["next"])], 17, C_CREAM)
+		cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		crow.add_child(cl)
+		crow.add_child(_button("إلغاء", _cancel_contract.bind(ci), Vector2(100, 46), 16, C_RED))
+
+
+func _trade_row(item: Dictionary, price_txt: String, verb: String, cb: Callable, col: Color, left: int) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	var res := str(item["res"])
+	row.add_child(_dot(RES_COLORS[res], 14.0))
+	row.add_child(_label_b("%d %s" % [_offer_qty(item), RES_AR[res]], 21))
+	row.add_child(_label("(لديك %d)" % int(resources[res]), 15, C_MUTED))
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(sp)
+	row.add_child(_label_b(price_txt, 20, C_GOLD))
+	var b := _button("%s (%d)" % [verb, maxi(0, left)], cb, Vector2(130, 50), 18, col)
+	b.disabled = left <= 0
+	row.add_child(b)
+	return row
 
 
 func _on_explore_pressed() -> void:
 	if exploring:
-		_toast("مجموعة الاستكشاف في الطريق. انتظر حتى اليوم %d." % explore_done_day)
+		_toast("مجموعة الاستكشاف في الطريق. تعود يوم %d." % explore_done_day)
 		return
 	if discovered_villages.size() >= VILLAGES.size():
 		_toast("اكتُشفت كل القرى المحيطة.")
@@ -4632,11 +6025,12 @@ func _on_explore_pressed() -> void:
 	if float(resources.get("Dinar", 0.0)) < float(cost):
 		_toast("ينقصك %d دينار لإرسال مجموعة الاستكشاف." % cost)
 		return
-	resources["Dinar"] = float(resources["Dinar"]) - float(cost)
+	_add_dinar(-float(cost), "الاستكشاف")
 	exploring = true
 	explore_done_day = day + EXPLORE_DAYS
-	_toast("انطلقت مجموعة الاستكشاف! ستعود في اليوم %d." % explore_done_day, 5.0)
-	_log_event("🔍 يوم %d: بدأ الاستكشاف (تكلفة %d دينار)." % [day, cost])
+	_toast("انطلقت مجموعة الاستكشاف! تعود يوم %d." % explore_done_day, 5.0)
+	_log_event("🔍 يوم %d: بدأ الاستكشاف (%d دينار)." % [day, cost])
+	_refresh_villages_sheet()
 	_refresh_ui()
 
 
@@ -4650,96 +6044,17 @@ func _finish_explore() -> void:
 		return
 	var idx := available[rng.randi() % available.size()]
 	discovered_villages.append(idx)
+	_vstate(idx)
 	var v: Dictionary = VILLAGES[idx]
-	_toast("اكتُشفت قرية: %s! افتح «القرى» للتجارة معهم." % str(v["ar"]), 7.0)
+	_toast("اكتُشفت قرية: %s! افتح «القرى» للبيع والشراء." % str(v["ar"]), 7.0)
 	_log_event("🏘 يوم %d: اكتُشفت قرية %s." % [day, str(v["ar"])])
 	_add_xp(20.0)
+	_check_goals()
 	_refresh_villages_sheet()
 	_refresh_ui()
 
 
-func _show_village_trade(village_idx: int) -> void:
-	var v: Dictionary = VILLAGES[village_idx]
-	var sells: Array = v["sells"]
-	var buys: Array = v.get("buys", [])
-	var layer := CanvasLayer.new()
-	layer.layer = 18
-	add_child(layer)
-	var bg := ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.65)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(bg)
-	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.custom_minimum_size = Vector2(600, 0)
-	panel.layout_direction = Control.LAYOUT_DIRECTION_RTL
-	layer.add_child(panel)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 12)
-	panel.add_child(vb)
-	vb.add_child(_label("تجارة مع %s" % str(v["ar"]), 28, C_GOLD))
-	vb.add_child(_label("دينارك: %d" % int(resources.get("Dinar", 0.0)), 18, C_MUTED))
-	# --- BUY section ---
-	vb.add_child(_label("شراء من القرية:", 20, C_CREAM))
-	for item in sells:
-		var item_d: Dictionary = item
-		var res: String = str(item_d["res"])
-		var qty: int = int(item_d["qty"])
-		var dinar: int = int(item_d["dinar"])
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		vb.add_child(row)
-		row.add_child(_dot(RES_COLORS[res], 14.0))
-		row.add_child(_label("%d %s" % [qty, RES_AR[res]], 22))
-		var sp := Control.new()
-		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(sp)
-		row.add_child(_label("← %d دينار" % dinar, 20, C_GOLD))
-		var buy_btn := _button("شراء", func():
-			if float(resources.get("Dinar", 0.0)) >= float(dinar):
-				resources["Dinar"] = float(resources["Dinar"]) - float(dinar)
-				resources[res] = float(resources.get(res, 0.0)) + float(qty)
-				_log_event("💰 يوم %d: اشتريت %d %s من %s." % [day, qty, RES_AR[res], str(v["ar"])])
-				_toast("اشتريت %d %s." % [qty, RES_AR[res]], 3.0)
-				_refresh_ui()
-			else:
-				_toast("لا تملك %d دينار." % dinar)
-		, Vector2(120, 50), 19, C_GREEN)
-		row.add_child(buy_btn)
-	# --- SELL section ---
-	if buys.size() > 0:
-		var sep := HSeparator.new()
-		vb.add_child(sep)
-		vb.add_child(_label("بيع للقرية:", 20, C_CREAM))
-		for item2 in buys:
-			var item_d2: Dictionary = item2
-			var res2: String = str(item_d2["res"])
-			var qty2: int = int(item_d2["qty"])
-			var dinar2: int = int(item_d2["dinar"])
-			var row2 := HBoxContainer.new()
-			row2.add_theme_constant_override("separation", 12)
-			vb.add_child(row2)
-			row2.add_child(_dot(RES_COLORS[res2], 14.0))
-			row2.add_child(_label("%d %s" % [qty2, RES_AR[res2]], 22))
-			var sp2 := Control.new()
-			sp2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			row2.add_child(sp2)
-			row2.add_child(_label("%d دينار ←" % dinar2, 20, C_GOLD))
-			var sell_btn := _button("بيع", func():
-				if float(resources.get(res2, 0.0)) >= float(qty2):
-					resources[res2] = float(resources.get(res2, 0.0)) - float(qty2)
-					resources["Dinar"] = float(resources.get("Dinar", 0.0)) + float(dinar2)
-					_log_event("💰 يوم %d: بعت %d %s لـ%s بـ%d دينار." % [day, qty2, RES_AR[res2], str(v["ar"]), dinar2])
-					_toast("بعت %d %s بـ%d دينار." % [qty2, RES_AR[res2], dinar2], 3.0)
-					_refresh_ui()
-				else:
-					_toast("لا تملك كمية كافية من %s." % RES_AR[res2])
-			, Vector2(120, 50), 19, Color("#c8a820"))
-			row2.add_child(sell_btn)
-	vb.add_child(_button("إغلاق", layer.queue_free.bind(), Vector2(0, 54), 22))
-
-
-func _spawn_caravan_visual() -> void:
+func _spawn_caravan_visual(small: bool = false) -> void:
 	if is_instance_valid(caravan_node):
 		caravan_node.queue_free()
 	caravan_node = Node3D.new()
@@ -4747,8 +6062,7 @@ func _spawn_caravan_visual() -> void:
 	caravan_node.position = Vector3(start_x, _height_at_world(start_x, camp_pos.z), camp_pos.z)
 	add_child(caravan_node)
 	caravan_timer = 0.0
-	# 3 camels (simple capsule + sphere)
-	for i in range(3):
+	for i in range(1 if small else 3):
 		var camel := Node3D.new()
 		camel.position = Vector3(float(i) * -80.0, 0.0, float(i % 2) * 30.0 - 15.0)
 		caravan_node.add_child(camel)
@@ -4785,3 +6099,1075 @@ func _spawn_caravan_visual() -> void:
 		cargo.position.y = 44.0
 		cargo.material_override = _mat(Color("#8a5a3a"))
 		camel.add_child(cargo)
+
+
+# ---------------------------------------------------------------- army: recruitment, raids, expeditions
+
+func _soldier_count(unit: String = "") -> int:
+	var n := 0
+	for v in survivors:
+		if v.unit != "" and (unit == "" or v.unit == unit):
+			n += 1
+	return n
+
+
+func _worker_count() -> int:
+	return survivors.size() - _soldier_count()
+
+
+func _barracks_capacity() -> int:
+	var cap := 0
+	for b in buildings:
+		if b.done and bool(BUILDINGS[b.type].get("barracks", false)):
+			cap += 6 * b.lvl
+	return cap
+
+
+func _army_power(include_away: bool = false) -> float:
+	var p := 0.0
+	for v in survivors:
+		if v.unit != "" and (include_away or not v.away):
+			p += float(UNITS[v.unit]["power"])
+	if army_unpaid:
+		p *= 0.5
+	return p * (0.7 + morale / 333.0)
+
+
+func _structure_defense() -> float:
+	var d := 0.0
+	for b in buildings:
+		if b.done and b.active and BUILDINGS[b.type].has("defense"):
+			d += float(BUILDINGS[b.type]["defense"]) * _lvl_mult(b)
+	return d
+
+
+func _militia_power() -> float:
+	var m := 0.0
+	for v in survivors:
+		if v.unit == "":
+			m += MILITIA_POWER
+	return m * (2.0 if policies.get("militia", false) else 1.0)
+
+
+func _defense_total() -> float:
+	return _army_power() + _militia_power() + _structure_defense()
+
+
+func _raid_strength() -> float:
+	var base := 10.0 + float(maxi(0, day - RAID_FIRST_DAY)) * 1.45 + float(survivors.size()) * 2.0
+	base *= maxf(0.4, 1.0 - 0.12 * float(lairs_cleared))
+	if raids_won + raids_lost == 0:
+		base *= 0.75
+	return base * rng.randf_range(0.85, 1.15)
+
+
+func _recruit(unit: String) -> void:
+	var u: Dictionary = UNITS[unit]
+	if _barracks_capacity() == 0:
+		_toast("ابنِ ثكنة أولًا (تبويب «دفاع»).")
+		return
+	if level < int(u["lv"]):
+		_toast("«%s» يُفتح في المستوى %d." % [u["ar"], int(u["lv"])])
+		return
+	if u.has("needs") and not _has_done(str(u["needs"])):
+		_toast("«%s» يحتاج %s." % [u["ar"], BUILDINGS[u["needs"]]["ar"]])
+		return
+	if _soldier_count() >= _barracks_capacity():
+		_toast("الثكنة ممتلئة (%d) — رقّها أو ابنِ ثكنة أخرى." % _barracks_capacity())
+		return
+	var missing := _missing_resource(u["cost"])
+	if missing != "":
+		_toast("ينقصك %s لتجنيد %s." % [RES_AR[missing], u["ar"]])
+		return
+	var pick: Villager = null
+	for pass_i in range(3):
+		for v in survivors:
+			if v.unit != "" or v.away:
+				continue
+			if pass_i == 0 and v.task == "idle":
+				pick = v
+			elif pass_i == 1 and v.task == "gather" and v.carry_amt <= 0.0:
+				pick = v
+			elif pass_i == 2 and v.task != "build":
+				pick = v
+			if pick != null:
+				break
+		if pick != null:
+			break
+	if pick == null:
+		_toast("لا يوجد ناجٍ متاح للتجنيد.")
+		return
+	for r in u["cost"]:
+		if r == "Dinar":
+			_add_dinar(-float(u["cost"][r]), "تجنيد")
+		else:
+			resources[r] = float(resources[r]) - float(u["cost"][r])
+	_set_idle(pick)
+	pick.unit = unit
+	pick.task = "guard"
+	pick.goal = _patrol_point()
+	_refresh_villager_look(pick)
+	_clamp_jobs()
+	_assign_tasks()
+	_toast("انضم %s إلى الجيش كـ%s." % [pick.vname, u["ar"]], 3.5)
+	_check_goals()
+	_refresh_ui()
+	_refresh_army_sheet()
+
+
+func _dismiss(unit: String) -> void:
+	for v in survivors:
+		if v.unit == unit and not v.away:
+			v.unit = ""
+			_refresh_villager_look(v)
+			_set_idle(v)
+			_toast("عاد %s إلى العمل المدني." % v.vname, 3.0)
+			_assign_tasks()
+			_refresh_ui()
+			_refresh_army_sheet()
+			return
+	_toast("لا يوجد %s متاح للتسريح." % UNITS[unit]["ar"])
+
+
+func _patrol_point() -> Vector3:
+	var r := _territory_radius() * rng.randf_range(0.45, 0.7)
+	return _random_point_around(camp_pos, r * 0.9, r)
+
+
+func _refresh_villager_look(v: Villager) -> void:
+	var body: MeshInstance3D = v.node.get_child(0)
+	var old := v.node.get_node_or_null("Gear")
+	if old != null:
+		old.free()
+	if v.unit == "":
+		body.material_override = _mat(SKILL_COLORS[v.skill])
+		return
+	body.material_override = _mat(UNITS[v.unit]["color"])
+	var gear := Node3D.new()
+	gear.name = "Gear"
+	v.node.add_child(gear)
+	_cyl(gear, 0.8, 0.8, 44.0, Vector3(8, 22, 0), Color("#6b4f33"))
+	_cyl(gear, 0.0, 2.0, 6.0, Vector3(8, 47, 0), Color("#b0b6bb"))
+	_sphere(gear, 6.2, Vector3(0, 34, 0), Color("#7a7f84"))
+	if v.unit == "rider":
+		var horse := MeshInstance3D.new()
+		var cap := CapsuleMesh.new()
+		cap.radius = 8.0
+		cap.height = 34.0
+		horse.mesh = cap
+		horse.rotation_degrees.x = 90.0
+		horse.position = Vector3(0, 9, 0)
+		horse.material_override = _mat(Color("#6b4a32"))
+		gear.add_child(horse)
+
+
+func _army_day(has_watchtower: bool) -> void:
+	if expedition_day >= 0 and day >= expedition_day:
+		_resolve_expedition()
+	if day < RAID_FIRST_DAY - 1 or is_instance_valid(raid_node):
+		return
+	if day == raid_next_day - 1 and has_watchtower and not raid_warned:
+		raid_warned = true
+		raid_strength = _raid_strength()
+		_show_raid_warning()
+	elif day >= raid_next_day:
+		if not raid_warned:
+			raid_strength = _raid_strength()
+		raid_warned = false
+		raid_next_day = day + RAID_MIN_GAP + rng.randi() % (RAID_MAX_GAP - RAID_MIN_GAP + 1)
+		_start_raid()
+
+
+func _show_raid_warning() -> void:
+	var tribute := int(ceil(raid_strength * 0.6))
+	var body := _open_modal("🏰 إنذار من برج المراقبة")
+	var l := _label("رصد الحرّاس عصابة تقترب من الشرق وستهاجم غدًا.\nقوة المهاجمين المقدّرة: %d  —  دفاعك الحالي: %d" % [int(raid_strength), int(_defense_total())], 20, C_CREAM)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(l)
+	var tip := _label("جنّد جنودًا الآن، أو ادفع إتاوة لتجنّب القتال.", 17, C_MUTED)
+	body.add_child(tip)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	body.add_child(row)
+	var prep := _button("نستعد للقتال", _close_all_modals, Vector2(220, 60), 20, C_GREEN)
+	prep.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(prep)
+	var pay := _button("ادفع إتاوة (%d دينار)" % tribute, _pay_tribute.bind(tribute), Vector2(220, 60), 20, Color("#8a6020"))
+	pay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(pay)
+
+
+func _pay_tribute(amount: int) -> void:
+	if float(resources["Dinar"]) < float(amount):
+		_toast("لا تملك %d دينار." % amount)
+		return
+	_add_dinar(-float(amount), "إتاوة")
+	raid_warned = false
+	raid_next_day = day + RAID_MIN_GAP + rng.randi() % (RAID_MAX_GAP - RAID_MIN_GAP + 1)
+	discontent = minf(100.0, discontent + 3.0)
+	_log_event("💸 يوم %d: دفعت إتاوة %d دينار لتجنب غارة." % [day, amount])
+	_toast("أخذوا المال ورحلوا... هذه المرة.", 4.0)
+	_close_all_modals()
+
+
+func _start_raid() -> void:
+	if is_instance_valid(raid_node):
+		raid_node.queue_free()
+	raid_node = Node3D.new()
+	var z0 := camp_pos.z + rng.randf_range(-250.0, 250.0)
+	var x0 := camp_pos.x + 950.0
+	raid_node.position = Vector3(x0, _height_at_world(x0, z0), z0)
+	add_child(raid_node)
+	var count := clampi(int(raid_strength / 10.0) + 2, 3, 12)
+	for i in range(count):
+		var r := Node3D.new()
+		r.position = Vector3(float(i % 4) * 22.0, 0.0, float(i / 4) * 22.0 - 22.0)
+		raid_node.add_child(r)
+		var body := MeshInstance3D.new()
+		var cap := CapsuleMesh.new()
+		cap.radius = 6.5
+		cap.height = 26.0
+		body.mesh = cap
+		body.position.y = 13.0
+		body.material_override = _mat(Color("#2b2522"))
+		r.add_child(body)
+		_sphere(r, 5.5, Vector3(0, 31, 0), Color("#3a2f28"))
+		_cyl(r, 0.8, 0.8, 30.0, Vector3(7, 20, 0), Color("#4a3b2e"))
+	raid_timer = 0.0
+	_toast("⚔ غارة! عصابة من %d رجال تهاجم من الشرق (قوة %d مقابل دفاعك %d)." % [count, int(raid_strength), int(_defense_total())], 6.0)
+	_log_event("⚔ يوم %d: غارة بقوة %d." % [day, int(raid_strength)])
+	for v in survivors:
+		if v.unit != "" and not v.away:
+			v.goal = _random_point_around(Vector3(camp_pos.x + 260.0, 0.0, z0), 10.0, 60.0)
+			v.wait = 6.0
+
+
+func _update_raid(dt: float) -> void:
+	if not is_instance_valid(raid_node):
+		return
+	raid_timer += dt
+	var target := Vector3(camp_pos.x + 230.0, 0.0, raid_node.position.z)
+	var flat := Vector3(raid_node.position.x, 0.0, raid_node.position.z)
+	var step := 55.0 * dt
+	if flat.distance_to(target) > step:
+		flat += (target - flat).normalized() * step
+		raid_node.position = Vector3(flat.x, _height_at_world(flat.x, flat.z), flat.z)
+		for c in raid_node.get_children():
+			(c as Node3D).position.y = absf(sin(raid_timer * 10.0 + c.position.x)) * 4.0
+		return
+	_resolve_raid()
+
+
+func _resolve_raid() -> void:
+	var def := _defense_total()
+	var s := raid_strength
+	var report: Array[String] = []
+	var won := def >= s
+	if won:
+		raids_won += 1
+		var loot := ceilf(s * 0.3)
+		_add_dinar(loot, "غنائم")
+		morale = minf(100.0, morale + 6.0)
+		hope = minf(100.0, hope + 6.0)
+		_add_xp(25.0)
+		report.append("انتصرنا! دفاعنا %d أمام هجوم بقوة %d." % [int(def), int(s)])
+		report.append("الغنائم: %d دينار  •  المعنويات +6" % int(loot))
+		if def < s * 1.25 and _soldier_count() > 0 and rng.randf() < 0.35:
+			var lost := _lose_soldier()
+			if lost != "":
+				report.append("سقط %s في المعركة. رحمه الله." % lost)
+		_log_event("🛡 يوم %d: صُدّت الغارة (+%d دينار)." % [day, int(loot)])
+	else:
+		raids_lost += 1
+		var frac := clampf(0.15 + (s - def) / maxf(1.0, s) * 0.4, 0.15, 0.5)
+		var stolen: Array[String] = []
+		for r in ["Food", "Wood", "Stone", "Scrap", "Oil", "Dinar"]:
+			var take := floorf(float(resources[r]) * frac)
+			if take >= 1.0:
+				resources[r] = float(resources[r]) - take
+				stolen.append("%d %s" % [int(take), RES_AR[r]])
+		morale = maxf(0.0, morale - 12.0)
+		hope = maxf(0.0, hope - 8.0)
+		report.append("هُزمنا: دفاعنا %d أمام هجوم بقوة %d." % [int(def), int(s)])
+		if not stolen.is_empty():
+			report.append("نُهب: " + "، ".join(stolen))
+		report.append("المعنويات −12")
+		if s > def * 1.6 and survivors.size() > 1:
+			var victim: Villager = survivors[rng.randi() % survivors.size()]
+			report.append("قُتل %s أثناء الغارة." % victim.vname)
+			survivors.erase(victim)
+			victim.node.queue_free()
+			_clamp_jobs()
+		_log_event("💔 يوم %d: نجحت الغارة ونُهبت المؤن." % day)
+	if is_instance_valid(raid_node):
+		var rn := raid_node
+		raid_node = null
+		var tw := create_tween()
+		tw.tween_property(rn, "position:x", rn.position.x + (900.0 if won else 300.0), 3.0)
+		tw.tween_callback(rn.queue_free)
+	for v in survivors:
+		if v.unit != "":
+			v.goal = _patrol_point()
+	_check_goals()
+	_refresh_ui()
+	var body := _open_modal("⚔ تقرير المعركة")
+	for line in report:
+		var l := _label(line, 20, Color("#a8e07a") if won else Color("#ff9a8a"))
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.add_child(l)
+	body.add_child(_label("الغارة القادمة متوقعة بعد %d–%d أيام. سجلّك: %d انتصار / %d هزيمة." % [RAID_MIN_GAP, RAID_MAX_GAP, raids_won, raids_lost], 17, C_MUTED))
+	body.add_child(_button("حسنًا", _close_all_modals, Vector2(0, 56), 22, C_GREEN))
+
+
+func _lose_soldier() -> String:
+	for v in survivors:
+		if v.unit != "" and not v.away:
+			var nm := v.vname
+			survivors.erase(v)
+			v.node.queue_free()
+			_clamp_jobs()
+			return nm
+	return ""
+
+
+func _start_expedition() -> void:
+	if lairs_cleared >= BANDIT_LAIRS.size():
+		_toast("طُهّرت كل الأوكار المعروفة.")
+		return
+	if expedition_day >= 0:
+		_toast("الجيش في حملة بالفعل.")
+		return
+	if _soldier_count() == 0:
+		_toast("لا جنود لإرسالهم.")
+		return
+	expedition_lair = lairs_cleared
+	expedition_day = day + 1
+	for v in survivors:
+		if v.unit != "":
+			v.away = true
+			v.node.visible = false
+	_toast("انطلق الجيش نحو «%s». يعود غدًا — المخيم أضعف في غيابه." % BANDIT_LAIRS[expedition_lair]["ar"], 5.0)
+	_refresh_army_sheet()
+	_refresh_ui()
+
+
+func _resolve_expedition() -> void:
+	var lair: Dictionary = BANDIT_LAIRS[expedition_lair]
+	var power := _army_power(true)
+	var ratio := power / float(lair["power"])
+	var success := ratio >= 1.0 or rng.randf() < clampf(ratio * ratio, 0.05, 0.95)
+	var lines: Array[String] = []
+	if success:
+		for r in lair["loot"]:
+			if r == "Dinar":
+				_add_dinar(float(lair["loot"][r]), "غنائم")
+			else:
+				resources[r] = float(resources[r]) + float(lair["loot"][r])
+		lairs_cleared += 1
+		_add_xp(40.0)
+		morale = minf(100.0, morale + 8.0)
+		var parts: Array[String] = []
+		for r2 in lair["loot"]:
+			parts.append("%d %s" % [int(lair["loot"][r2]), RES_AR[r2]])
+		lines.append("طُهّر «%s»! الغنائم: %s." % [lair["ar"], "، ".join(parts)])
+		lines.append("الغارات القادمة أضعف بـ12%.")
+		_log_event("🏴 يوم %d: طُهّر %s." % [day, lair["ar"]])
+	else:
+		var losses := maxi(1, int(ceil(float(_soldier_count()) * 0.3)))
+		var names: Array[String] = []
+		for i in range(losses):
+			for v in survivors:
+				if v.unit != "":
+					names.append(v.vname)
+					survivors.erase(v)
+					v.node.queue_free()
+					break
+		morale = maxf(0.0, morale - 6.0)
+		lines.append("فشلت الحملة على «%s» (قوتنا %d من %d مطلوبة)." % [lair["ar"], int(power), int(lair["power"])])
+		if not names.is_empty():
+			lines.append("فقدنا: " + "، ".join(names))
+	for v in survivors:
+		if v.away:
+			v.away = false
+			v.node.visible = true
+			v.node.position = _random_point_around(camp_pos, 200.0, 260.0)
+			v.goal = _patrol_point()
+	expedition_day = -1
+	expedition_lair = -1
+	_clamp_jobs()
+	_check_goals()
+	var body := _open_modal("🏴 عودة الحملة")
+	for line in lines:
+		var l := _label(line, 20, Color("#a8e07a") if success else Color("#ff9a8a"))
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.add_child(l)
+	body.add_child(_button("حسنًا", _close_all_modals, Vector2(0, 56), 22, C_GREEN))
+
+
+func _build_army_sheet() -> void:
+	army_sheet = _sheet(Control.PRESET_CENTER_BOTTOM)
+	army_sheet.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	army_sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	army_sheet.offset_bottom = -116
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(820, 0)
+	box.add_theme_constant_override("separation", 8)
+	army_sheet.add_child(box)
+	box.add_child(_label_b("الجيش والدفاع", 28, C_GOLD))
+	var scroll := _vscroll(380.0)
+	box.add_child(scroll)
+	army_list = VBoxContainer.new()
+	army_list.add_theme_constant_override("separation", 8)
+	army_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(army_list)
+
+
+func _refresh_army_sheet() -> void:
+	if not is_instance_valid(army_list):
+		return
+	for c in army_list.get_children():
+		c.queue_free()
+	var def_row := HBoxContainer.new()
+	def_row.add_theme_constant_override("separation", 22)
+	army_list.add_child(def_row)
+	def_row.add_child(_stat_box("الدفاع الكلي", str(int(_defense_total())), C_GOLD))
+	def_row.add_child(_stat_box("الجيش", str(int(_army_power())), Color("#e08a7a")))
+	def_row.add_child(_stat_box("الأهالي", str(int(_militia_power())), C_CREAM))
+	def_row.add_child(_stat_box("أسوار وأبراج", str(int(_structure_defense())), Color("#d8d0bb")))
+	def_row.add_child(_stat_box("الجنود", "%d/%d" % [_soldier_count(), _barracks_capacity()], Color("#9fc0e0")))
+	var raid_txt := ""
+	if day < RAID_FIRST_DAY:
+		raid_txt = "الغارات تبدأ نحو اليوم %d. ابنِ ثكنة وبرج مراقبة." % RAID_FIRST_DAY
+	elif _has_done("Watchtower"):
+		raid_txt = "برج المراقبة: الغارة القادمة متوقعة يوم %d تقريبًا." % raid_next_day
+	else:
+		raid_txt = "لا نعرف موعد الغارة القادمة — برج المراقبة يكشفها قبل يوم."
+	if army_unpaid:
+		raid_txt += "\n⚠ الأجور غير مدفوعة: قوة الجيش نصفها."
+	var rl := _label(raid_txt, 17, Color("#ffd98a"))
+	rl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	army_list.add_child(rl)
+	if _barracks_capacity() == 0:
+		army_list.add_child(_label("ابنِ «الثكنة» من تبويب «دفاع» لتجنيد الجنود.", 18, C_MUTED))
+	for key in UNIT_ORDER:
+		var u: Dictionary = UNITS[key]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		army_list.add_child(row)
+		row.add_child(_dot(u["color"], 16.0))
+		var nm := _label_b("%s ×%d" % [u["ar"], _soldier_count(key)], 21)
+		nm.custom_minimum_size = Vector2(120, 0)
+		row.add_child(nm)
+		var parts: Array[String] = []
+		for r in u["cost"]:
+			parts.append("%d %s" % [int(u["cost"][r]), RES_AR[r]])
+		var req := ""
+		if level < int(u["lv"]):
+			req = " — يُفتح م%d" % int(u["lv"])
+		elif u.has("needs") and not _has_done(str(u["needs"])):
+			req = " — يحتاج %s" % BUILDINGS[u["needs"]]["ar"]
+		var dl := _label("قوة %d، أجر %s/يوم — %s%s" % [int(u["power"]), _fmt(float(u["wage"])), "، ".join(parts), req], 16, C_MUTED)
+		dl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.add_child(dl)
+		row.add_child(_button("جنّد", _recruit.bind(key), Vector2(100, 50), 18, C_GREEN))
+		row.add_child(_button("سرّح", _dismiss.bind(key), Vector2(90, 50), 17, C_BTN))
+	army_list.add_child(HSeparator.new())
+	if lairs_cleared < BANDIT_LAIRS.size():
+		var lair: Dictionary = BANDIT_LAIRS[lairs_cleared]
+		var lr := HBoxContainer.new()
+		lr.add_theme_constant_override("separation", 10)
+		army_list.add_child(lr)
+		var ll := _label("🏴 الهدف التالي: «%s» — قوة مطلوبة %d (جيشك %d)" % [lair["ar"], int(lair["power"]), int(_army_power(true))], 18, C_CREAM)
+		ll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ll.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lr.add_child(ll)
+		var eb := _button("أرسل الحملة" if expedition_day < 0 else "الحملة في الطريق", _start_expedition, Vector2(190, 52), 18, Color("#8a3a2e"))
+		eb.disabled = expedition_day >= 0 or _soldier_count() == 0
+		lr.add_child(eb)
+	else:
+		army_list.add_child(_label("طُهّرت كل أوكار اللصوص المعروفة. الطرق آمنة أكثر.", 18, Color("#a8e07a")))
+	army_list.add_child(_label("السجل: %d انتصار  •  %d هزيمة  •  %d أوكار مطهّرة" % [raids_won, raids_lost, lairs_cleared], 16, C_MUTED))
+
+
+# ---------------------------------------------------------------- UI v3: modals, panels, planning
+
+var modal_layers: Array = []
+
+
+func _font_weight(base: Font, w: int) -> Font:
+	var fv := FontVariation.new()
+	fv.base_font = base
+	var ts := TextServerManager.get_primary_interface()
+	if ts != null:
+		fv.variation_opentype = {ts.name_to_tag("wght"): w}
+	return fv
+
+
+func _label_b(text: String, size: int, color: Color = C_CREAM) -> Label:
+	var l := _label(text, size, color)
+	l.add_theme_font_override("font", ui_font_bold)
+	return l
+
+
+func _vscroll(max_h: float) -> ScrollContainer:
+	var s := ScrollContainer.new()
+	s.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	s.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	s.custom_minimum_size = Vector2(0, max_h)
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.scroll_deadzone = 100000
+	scroll_targets.append(s)
+	return s
+
+
+func _card_panel(bg: Color) -> PanelContainer:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", _style(bg, 16, Color(1, 1, 1, 0.1), 1, 12))
+	return p
+
+
+func _stat_box(title: String, value: String, color: Color) -> Control:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", -2)
+	col.add_child(_label(title, 15, C_MUTED))
+	col.add_child(_label_b(value, 26, color))
+	return col
+
+
+func _modal_open() -> bool:
+	return not modal_layers.is_empty()
+
+
+func _sync_menu_open() -> void:
+	var m := not modal_layers.is_empty()
+	if is_instance_valid(menu_layer) and menu_layer.visible:
+		m = true
+	if is_instance_valid(start_screen) and start_screen.visible:
+		m = true
+	menu_open = m
+
+
+func _open_modal(title: String, width: float = 640.0) -> VBoxContainer:
+	var layer := Control.new()
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(layer)
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0.62)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := PanelContainer.new()
+	var st := _panel_style()
+	st.border_color = Color(C_GOLD, 0.55)
+	st.set_border_width_all(2)
+	panel.add_theme_stylebox_override("panel", st)
+	center.add_child(panel)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 10)
+	panel.add_child(outer)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	outer.add_child(head)
+	var t := _label_b(title, 27, C_GOLD)
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	head.add_child(_button("إغلاق", _close_all_modals, Vector2(110, 50), 19, C_RED))
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.scroll_deadzone = 100000
+	outer.add_child(scroll)
+	var body := VBoxContainer.new()
+	body.custom_minimum_size = Vector2(width, 0)
+	body.add_theme_constant_override("separation", 10)
+	scroll.add_child(body)
+	scroll_targets.append(scroll)
+	modal_layers.append(layer)
+	_sync_menu_open()
+	_fit_modal.call_deferred(scroll, body)
+	return body
+
+
+func _fit_modal(scroll: ScrollContainer, body: VBoxContainer) -> void:
+	if not is_instance_valid(scroll) or not is_instance_valid(body):
+		return
+	var max_h := ui_root.size.y * 0.7
+	scroll.custom_minimum_size = Vector2(body.custom_minimum_size.x + 10.0, minf(body.get_combined_minimum_size().y + 6.0, max_h))
+
+
+func _close_all_modals() -> void:
+	for l in modal_layers:
+		if is_instance_valid(l):
+			(l as Node).queue_free()
+	modal_layers.clear()
+	var keep: Array = []
+	for s in scroll_targets:
+		if is_instance_valid(s) and not (s as Node).is_queued_for_deletion():
+			var inside_modal := false
+			var n: Node = s
+			while n != null:
+				if n.is_queued_for_deletion():
+					inside_modal = true
+					break
+				n = n.get_parent()
+			if not inside_modal:
+				keep.append(s)
+	scroll_targets = keep
+	_sync_menu_open()
+
+
+# ── Diwan: taxes, policies, decisions, demand, happiness ──
+
+func _show_council_panel() -> void:
+	_close_all_modals()
+	var body := _open_modal("الديوان — مجلس المستوطنة", 780.0)
+	var stats := HBoxContainer.new()
+	stats.add_theme_constant_override("separation", 28)
+	body.add_child(stats)
+	stats.add_child(_stat_box("الدنانير", str(int(resources["Dinar"])), C_GOLD))
+	stats.add_child(_stat_box("المعنويات", str(int(morale)), Color("#7fc0e8")))
+	stats.add_child(_stat_box("الأمل", str(int(hope)), Color("#9fd36b")))
+	stats.add_child(_stat_box("السخط", str(int(discontent)), Color("#ff8a6a")))
+	body.add_child(_label_b("الطلب في المستوطنة", 20, C_GOLD))
+	for drow in [["سكن", demand_housing, Color("#60a0e0"), "ابنِ بيوتًا"], ["إنتاج", demand_production, Color("#e0a040"), "زد عمال الطعام والماء"], ["خدمات", demand_services, Color("#70c070"), "ابنِ جامعًا/عيادة/ساحة قرب البيوت"]]:
+		var dr := HBoxContainer.new()
+		dr.add_theme_constant_override("separation", 10)
+		body.add_child(dr)
+		var dl := _label_b(str(drow[0]), 18)
+		dl.custom_minimum_size = Vector2(80, 0)
+		dr.add_child(dl)
+		var bar := _bar(drow[2], 260.0, 16.0)
+		bar.value = float(drow[1])
+		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		dr.add_child(bar)
+		dr.add_child(_label("%d%%" % int(float(drow[1])), 17, C_MUTED))
+		if float(drow[1]) > 60.0:
+			dr.add_child(_label("← " + str(drow[3]), 16, Color("#ffd98a")))
+	if not happiness_notes.is_empty():
+		body.add_child(_label_b("ما الذي حرّك المعنويات أمس؟", 20, C_GOLD))
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", 16)
+		body.add_child(flow)
+		for hn in happiness_notes:
+			var d := float(hn[1])
+			flow.add_child(_label("%s %s%s" % [hn[0], "+" if d >= 0.0 else "", _fmt(d)], 16, Color("#a8e07a") if d >= 0.0 else Color("#ff9a8a")))
+	body.add_child(_label_b("الضريبة (لكل ناجٍ يوميًا)", 20, C_GOLD))
+	var tax_row := HBoxContainer.new()
+	tax_row.add_theme_constant_override("separation", 10)
+	body.add_child(tax_row)
+	var workers := float(_worker_count())
+	for ti in range(TAX_LEVELS.size()):
+		var est := float(TAX_PER_HEAD[ti]) * workers * (0.5 if policies.get("relief", false) else 1.0)
+		var txt := "%s\n+%s دينار/يوم" % [str(TAX_LEVELS[ti]["ar"]), _fmt(est)]
+		var tb := _button(txt, _set_tax.bind(ti), Vector2(170, 62), 16, C_GREEN if ti == tax_level_idx else C_BTN)
+		tax_row.add_child(tb)
+	body.add_child(_label("الضريبة الأعلى تزيد السخط يوميًا: %s" % "، ".join(["0", "0", "+0.8", "+2.5"]), 15, C_MUTED))
+	body.add_child(_label_b("السياسات", 20, C_GOLD))
+	for key in POLICIES:
+		var pol: Dictionary = POLICIES[key]
+		var on := bool(policies.get(key, false))
+		var pr := HBoxContainer.new()
+		pr.add_theme_constant_override("separation", 10)
+		body.add_child(pr)
+		var pl := _label("%s — %s" % [pol["ar"], pol["desc"]], 17, C_CREAM if on else C_MUTED)
+		pl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		pr.add_child(pl)
+		pr.add_child(_button("مفعّلة" if on else "تفعيل", _toggle_policy.bind(key), Vector2(120, 48), 17, C_GREEN if on else C_BTN))
+	body.add_child(_label_b("قرارات المجلس", 20, C_GOLD))
+	var act := HBoxContainer.new()
+	act.add_theme_constant_override("separation", 10)
+	body.add_child(act)
+	act.add_child(_button("وليمة عامة\n−20 طعام، معنويات +20", _council_feast, Vector2(240, 66), 16, Color("#8a4a20")))
+	act.add_child(_button("خطاب تشجيعي\n−5 دينار، سخط −15", _council_speech, Vector2(240, 66), 16, Color("#4a6a9a")))
+
+
+func _set_tax(i: int) -> void:
+	tax_level_idx = i
+	_show_council_panel()
+
+
+func _toggle_policy(key: String) -> void:
+	policies[key] = not bool(policies.get(key, false))
+	if not policies[key]:
+		policies.erase(key)
+	_show_council_panel()
+
+
+func _council_feast() -> void:
+	if float(resources["Food"]) < 20.0:
+		_toast("طعام غير كافٍ (يلزم 20).")
+		return
+	resources["Food"] = float(resources["Food"]) - 20.0
+	morale = minf(100.0, morale + 20.0)
+	discontent = maxf(0.0, discontent - 10.0)
+	_log_event("🍽 يوم %d: وليمة عامة." % day)
+	_toast("أُقيمت وليمة! المعنويات +20.", 4.0)
+	_show_council_panel()
+
+
+func _council_speech() -> void:
+	if float(resources["Dinar"]) < 5.0:
+		_toast("لا تملك 5 دنانير.")
+		return
+	_add_dinar(-5.0, "قرارات المجلس")
+	discontent = maxf(0.0, discontent - 15.0)
+	hope = minf(100.0, hope + 10.0)
+	_log_event("📜 يوم %d: خطاب تشجيعي." % day)
+	_toast("خطاب المجلس رفع الأمل وخفّض السخط.", 4.0)
+	_show_council_panel()
+
+
+func _show_moral_event() -> void:
+	if pending_event < 0 or pending_event >= MORAL_EVENTS.size():
+		return
+	var ev: Dictionary = MORAL_EVENTS[pending_event]
+	pending_event = -1
+	var body := _open_modal("قرار صعب")
+	var lbl := _label(str(ev["text"]), 20, C_CREAM)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(lbl)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 12)
+	body.add_child(hb)
+	for side in ["a", "b"]:
+		var b := _button(str(ev[side]), _moral_choice.bind(str(ev[side]), str(ev["effect_" + side])), Vector2(0, 66), 17, C_GREEN if side == "a" else C_BTN)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hb.add_child(b)
+
+
+func _moral_choice(text: String, eff: String) -> void:
+	_log_event("⚖ يوم %d: %s" % [day, text])
+	_close_all_modals()
+	_apply_moral_effect(eff)
+	_refresh_ui()
+
+
+# ── economy sheet (Cities: Skylines style budget & flows) ──
+
+func _build_economy_sheet() -> void:
+	economy_sheet = _sheet(Control.PRESET_CENTER_BOTTOM)
+	economy_sheet.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	economy_sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	economy_sheet.offset_bottom = -116
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(860, 0)
+	box.add_theme_constant_override("separation", 8)
+	economy_sheet.add_child(box)
+	box.add_child(_label_b("الاقتصاد — من أين تأتي الموارد وأين تذهب", 26, C_GOLD))
+	var scroll := _vscroll(390.0)
+	box.add_child(scroll)
+	economy_list = VBoxContainer.new()
+	economy_list.add_theme_constant_override("separation", 8)
+	economy_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(economy_list)
+
+
+const RES_USES := {
+	"Food": "أكل الناجين والجنود، المطبخ يوفر 25%، الإسطبل يطعم الخيول.",
+	"Water": "شرب الناجين (+40% صيفًا)، ري المزارع، سقاية الحظائر.",
+	"Wood": "البناء، تدفئة الخريف والشتاء، حطب المطبخ والورشة والمعصرة.",
+	"Stone": "البناء، صيانة البيوت الحجرية والأسوار، رصف الطرق.",
+	"Scrap": "البناء، أدوات المقلع، أسلحة الجنود.",
+	"Oil": "قناديل الجامع والمكتبة، دواء العيادة، وأغلى سلعة للبيع.",
+	"Dinar": "أجور الجنود والمعلمين، التجارة، الاستكشاف، الترقيات.",
+}
+
+
+func _refresh_economy_sheet() -> void:
+	if not is_instance_valid(economy_list):
+		return
+	for c in economy_list.get_children():
+		c.queue_free()
+	var grid := GridContainer.new()
+	grid.columns = 6
+	grid.add_theme_constant_override("h_separation", 26)
+	grid.add_theme_constant_override("v_separation", 6)
+	economy_list.add_child(grid)
+	for h in ["المورد", "المخزون", "دخل أمس", "استهلاك/يوم", "الصافي", "يكفي"]:
+		grid.add_child(_label_b(h, 17, C_MUTED))
+	var cons := _compute_consumption()
+	for r in RES_NAMES:
+		var stock := float(resources[r])
+		var inc := float(last_income.get(r, 0.0))
+		if r == "Dinar":
+			inc = 0.0
+			for bl in budget_lines:
+				if float(bl[1]) > 0.0:
+					inc += float(bl[1])
+		var use := float(cons.get(r, 0.0))
+		var net := inc - use
+		var nm := HBoxContainer.new()
+		nm.add_theme_constant_override("separation", 6)
+		nm.add_child(_dot(RES_COLORS[r], 12.0))
+		nm.add_child(_label_b(RES_AR[r], 19, RES_COLORS[r].lightened(0.2)))
+		grid.add_child(nm)
+		grid.add_child(_label_b(str(int(stock)), 19))
+		grid.add_child(_label("+" + _fmt(inc), 18, Color("#a8e07a")))
+		grid.add_child(_label("−" + _fmt(use), 18, Color("#ff9a8a") if use > 0.0 else C_MUTED))
+		grid.add_child(_label_b(("+" if net >= 0.0 else "") + _fmt(net), 18, Color("#a8e07a") if net >= 0.0 else Color("#ff9a8a")))
+		var days_txt := "∞" if use <= 0.01 else ("%d يوم" % int(stock / use))
+		grid.add_child(_label(days_txt, 17, Color("#ff9a8a") if use > 0.01 and stock / use < 3.0 else C_CREAM))
+	economy_list.add_child(HSeparator.new())
+	economy_list.add_child(_label_b("ميزانية الدينار (أمس)", 20, C_GOLD))
+	if budget_lines.is_empty():
+		economy_list.add_child(_label("لا حركة بعد — بِع للقرى، ابنِ سوقًا، أو فعّل الضرائب في الديوان.", 17, C_MUTED))
+	else:
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", 20)
+		economy_list.add_child(flow)
+		var total := 0.0
+		for bl in budget_lines:
+			total += float(bl[1])
+			flow.add_child(_label("%s %s%s" % [bl[0], "+" if float(bl[1]) >= 0.0 else "", _fmt(float(bl[1]))], 17, Color("#a8e07a") if float(bl[1]) >= 0.0 else Color("#ff9a8a")))
+		economy_list.add_child(_label_b("الصافي: %s%s دينار/يوم" % ["+" if total >= 0.0 else "", _fmt(total)], 18, Color("#a8e07a") if total >= 0.0 else Color("#ff9a8a")))
+	if not unpaid_notes.is_empty():
+		economy_list.add_child(_label_b("تنبيهات", 20, Color("#ff9a8a")))
+		for un in unpaid_notes:
+			var ul := _label("• " + str(un), 17, Color("#ffc0a8"))
+			ul.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			economy_list.add_child(ul)
+	economy_list.add_child(HSeparator.new())
+	economy_list.add_child(_label_b("لكل مورد قيمة", 20, C_GOLD))
+	for r2 in RES_USES:
+		var l := _label("%s: %s" % [RES_AR[r2], RES_USES[r2]], 16, C_CREAM)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		economy_list.add_child(l)
+
+
+# ── planning toolbar (roads, zones, land value) ──
+
+func _build_plan_sheet() -> void:
+	plan_sheet = _sheet(Control.PRESET_CENTER_BOTTOM)
+	plan_sheet.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	plan_sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	plan_sheet.offset_bottom = -116
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	plan_sheet.add_child(box)
+	var rows := [
+		["الطرق", [["road_dirt", "ترابي (مجاني)"], ["road_paved", "مرصوف (حجر)"], ["road_erase", "إزالة طريق"]]],
+		["المناطق", [["zone_1", "سكنية"], ["zone_2", "تجارية"], ["zone_3", "صناعية"], ["zone_4", "زراعية"], ["zone_erase", "مسح"]]],
+	]
+	for row_def in rows:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var t := _label_b(str(row_def[0]), 20, C_GOLD)
+		t.custom_minimum_size = Vector2(90, 0)
+		row.add_child(t)
+		for item in row_def[1]:
+			var b := _button(str(item[1]), _set_plan_mode.bind(str(item[0])), Vector2(140, 52), 17)
+			row.add_child(b)
+			plan_buttons[str(item[0])] = b
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 8)
+	box.add_child(row3)
+	var t3 := _label_b("عرض", 20, C_GOLD)
+	t3.custom_minimum_size = Vector2(90, 0)
+	row3.add_child(t3)
+	var lvb := _button("قيمة الأرض", _toggle_lv_overlay, Vector2(160, 52), 17)
+	row3.add_child(lvb)
+	plan_buttons["lv"] = lvb
+	var help := _label("المناطق تمنع خلط البيوت بالمصانع والحظائر، والمبنى في منطقته يحصل +20%.", 15, C_MUTED)
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.custom_minimum_size = Vector2(420, 0)
+	row3.add_child(help)
+
+
+func _refresh_plan_buttons() -> void:
+	for k in plan_buttons:
+		var b: Button = plan_buttons[k]
+		var ks := str(k)
+		var on: bool = (ks == plan_mode) or (ks == "lv" and lv_overlay)
+		var col := C_GREEN if on else C_BTN
+		if ks.begins_with("zone_") and ks != "zone_erase":
+			var z := int(ks.substr(5))
+			col = Color(ZONE_COLORS[z], 1.0).darkened(0.35 if on else 0.62)
+		b.add_theme_stylebox_override("normal", _btn_style(col))
+		b.add_theme_stylebox_override("hover", _btn_style(col.lightened(0.1)))
+
+
+func _build_dock() -> void:
+	dock = _anchored_panel(Control.PRESET_CENTER_BOTTOM)
+	dock.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	dock.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	dock.offset_bottom = -12
+	dock.add_theme_stylebox_override("panel", _style(Color(0.09, 0.105, 0.075, 0.88), 26, C_BORDER, 2, 10))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	dock.add_child(row)
+	row.add_child(_dock_button("build", "بناء", _toggle_sheet.bind("build")))
+	row.add_child(_dock_button("plan", "تخطيط", _toggle_sheet.bind("plan")))
+	row.add_child(_dock_button("workers", "العمال", _toggle_sheet.bind("workers")))
+	row.add_child(_dock_button("army", "الجيش", _toggle_sheet.bind("army")))
+	row.add_child(_dock_button("villages", "التجارة", _toggle_sheet.bind("villages")))
+	row.add_child(_dock_button("coins", "الاقتصاد", _toggle_sheet.bind("economy")))
+	row.add_child(_dock_button("missions2", "المهام", _toggle_sheet.bind("missions")))
+
+
+func _build_inspect_bar() -> void:
+	inspect_bar = _sheet(Control.PRESET_CENTER_BOTTOM)
+	inspect_bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	inspect_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	inspect_bar.offset_bottom = -12
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	inspect_bar.add_child(row)
+	inspect_label = _label("", 18)
+	inspect_label.custom_minimum_size = Vector2(420, 0)
+	inspect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inspect_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(inspect_label)
+	upgrade_btn = _button("ترقية", _upgrade_pressed, Vector2(190, 70), 17, Color("#4a7a9a"))
+	upgrade_btn.visible = false
+	row.add_child(upgrade_btn)
+	council_btn = _button("إدارة الديوان", _show_council_panel, Vector2(170, 70), 18, Color("#8a6020"))
+	council_btn.visible = false
+	row.add_child(council_btn)
+	army_btn = _button("الجيش", _inspect_open_sheet.bind("army"), Vector2(130, 70), 18, Color("#8a3a2e"))
+	army_btn.visible = false
+	row.add_child(army_btn)
+	trade_btn = _button("التجارة", _inspect_open_sheet.bind("villages"), Vector2(130, 70), 18, Color("#2f6a8a"))
+	trade_btn.visible = false
+	row.add_child(trade_btn)
+	demolish_btn = _button("هدم", _demolish_pressed, Vector2(130, 70), 19, C_RED)
+	row.add_child(demolish_btn)
+	row.add_child(_button("إغلاق", _close_inspect, Vector2(110, 70), 19))
+
+
+func _inspect_open_sheet(which: String) -> void:
+	_close_inspect()
+	_toggle_sheet(which)
+
+
+func _hide_sheets() -> void:
+	for s in [build_sheet, workers_sheet, missions_sheet, log_sheet, villages_sheet, army_sheet, economy_sheet, plan_sheet]:
+		if is_instance_valid(s):
+			(s as Control).visible = false
+
+
+func _toggle_sheet(which: String) -> void:
+	var map := {"build": build_sheet, "workers": workers_sheet, "missions": missions_sheet, "log": log_sheet,
+		"villages": villages_sheet, "army": army_sheet, "economy": economy_sheet, "plan": plan_sheet}
+	var target: PanelContainer = map.get(which, build_sheet)
+	var show := not target.visible
+	_hide_sheets()
+	_close_inspect()
+	if which != "plan" and plan_mode != "":
+		_set_plan_mode(plan_mode)
+	if which == "plan" and not show and plan_mode != "":
+		_set_plan_mode(plan_mode)
+	target.visible = show
+	if show:
+		_fit_sheet(target)
+	match which:
+		"workers":
+			if show:
+				workers_opened = true
+				_check_goals()
+		"build":
+			if show:
+				_rebuild_cards()
+		"log":
+			if show:
+				_refresh_log_sheet()
+		"villages":
+			if show:
+				_refresh_villages_sheet()
+		"army":
+			if show:
+				_refresh_army_sheet()
+		"economy":
+			if show:
+				_refresh_economy_sheet()
+		"plan":
+			_show_territory(show)
+			_refresh_plan_buttons()
+	_refresh_ui()
+
+
+# ── touch scrolling that works over buttons (Godot gives drags to the button, not the ScrollContainer) ──
+
+func _scroll_to_start(sc: ScrollContainer) -> void:
+	await get_tree().process_frame
+	if is_instance_valid(sc):
+		sc.scroll_horizontal = int(sc.get_h_scroll_bar().max_value)
+
+
+# Sheets must stay between the top bar and the dock whatever the screen/text size.
+func _fit_sheet(sheet: PanelContainer) -> void:
+	var h := clampf(ui_root.size.y - 372.0, 150.0, 420.0)
+	for s in scroll_targets:
+		if is_instance_valid(s) and sheet.is_ancestor_of(s) and (s as ScrollContainer).vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED:
+			(s as ScrollContainer).custom_minimum_size.y = h
+	# Collapse to the bottom edge; the minimum size then grows the panel upward (grow_vertical = BEGIN).
+	sheet.offset_top = sheet.offset_bottom
+
+
+func _scroll_under(pos: Vector2) -> ScrollContainer:
+	for i in range(scroll_targets.size() - 1, -1, -1):
+		var s = scroll_targets[i]
+		if not is_instance_valid(s):
+			continue
+		var sc: ScrollContainer = s
+		if sc.is_visible_in_tree() and sc.get_global_rect().has_point(pos):
+			return sc
+	return null
+
+
+func _input(event: InputEvent) -> void:
+	var touch := DisplayServer.is_touchscreen_available()
+	var pos := Vector2.ZERO
+	var phase := ""
+	var rel := Vector2.ZERO
+	if event is InputEventScreenTouch and event.index == 0:
+		pos = event.position
+		phase = "down" if event.pressed else "up"
+	elif event is InputEventScreenDrag and event.index == 0:
+		pos = event.position
+		rel = event.relative
+		phase = "move"
+	elif not touch and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		pos = event.position
+		phase = "down" if event.pressed else "up"
+	elif not touch and event is InputEventMouseMotion and scroll_pressing:
+		pos = event.position
+		rel = event.relative
+		phase = "move"
+	elif not touch and event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		var sw := _scroll_under(event.position)
+		if sw != null:
+			var dir := -60 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 60
+			if sw.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED:
+				sw.scroll_horizontal += dir
+			else:
+				sw.scroll_vertical += dir
+			get_viewport().set_input_as_handled()
+		return
+	else:
+		return
+	match phase:
+		"down":
+			scroll_active = _scroll_under(pos)
+			scroll_press = pos
+			scroll_dragged = false
+			scroll_pressing = scroll_active != null
+		"move":
+			if scroll_active == null or not is_instance_valid(scroll_active):
+				return
+			if pos.distance_to(scroll_press) > 12.0:
+				scroll_dragged = true
+			if scroll_dragged:
+				if scroll_active.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED:
+					scroll_active.scroll_horizontal -= int(rel.x)
+				else:
+					scroll_active.scroll_vertical -= int(rel.y)
+		"up":
+			scroll_pressing = false
+			scroll_active = null
