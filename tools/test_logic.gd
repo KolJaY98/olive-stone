@@ -52,7 +52,7 @@ func _init() -> void:
 	check(absf(w.pos.y - s._height_at_world(w.pos.x, w.pos.z)) < 40.0, "building sits on terrain height")
 	var fd_inland: String = s._place_problem(0, 0, "L", "Fishing Dock")
 	check(fd_inland != "", "fishing dock refused inland: " + fd_inland)
-	var far: String = s._place_problem(9, 0, "S", "Tent")
+	var far: String = s._place_problem(13, 0, "S", "Shack")
 	check(far.find("حدود") >= 0, "outside territory refused")
 	# a road westward extends territory to the coast
 	var x: float = s.camp_pos.x

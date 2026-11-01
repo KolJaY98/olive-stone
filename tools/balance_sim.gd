@@ -2,7 +2,7 @@ extends SceneTree
 # Balance check: a simple scripted player builds, staffs jobs, trades and defends for 90 days.
 # Run: godot --headless --path . --script tools/balance_sim.gd
 
-const ORDER := ["Well", "Tent", "Woodcutter", "Storehouse", "Farm", "Small House", "Small Quarry", "Kitchen", "Barracks",
+const ORDER := ["Well", "Shack", "Woodcutter", "Storehouse", "Farm", "Small House", "Small Quarry", "Kitchen", "Barracks",
 	"Market", "Watchtower", "Small House", "Mosque", "Stone House", "Pen", "Olive Press", "Diwan",
 	"Quarry", "Workshop", "Clinic", "Stone House", "Plaza", "Large House", "School", "Wall", "Wall", "Large House"]
 

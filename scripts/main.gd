@@ -6,7 +6,7 @@ extends Node3D
 # to resource points, gather, and carry loads back. Experience unlocks buildings and
 # building plots. Arabic, right-to-left interface.
 
-const VERSION := "3.0.0"
+const VERSION := "3.1.0"
 const GRID := 48
 const TILE_SIZE := 75.0
 const START_POP := 5
@@ -14,7 +14,7 @@ const BASE_HOUSING := 6
 const SAVE_PATH := "user://olive_stone_save.json"
 const AUTOSAVE_PATH := "user://olive_stone_autosave.json"
 const SETTINGS_PATH := "user://settings.cfg"
-const SAVE_VERSION := 7
+const SAVE_VERSION := 8
 const MIN_SAVE_VERSION := 6
 const WORLD_SEED := 987654
 const SEA_COLOR := Color("#477f91")
@@ -38,7 +38,10 @@ const SEASON_WATER_MUL := [1.0, 1.4, 1.0, 1.0]
 const SEASON_FOOD_MUL := [1.0, 1.0, 1.0, 1.2]
 const SEASON_SKY := [Color("#c8dff0"), Color("#d8eed0"), Color("#e8c870"), Color("#9ab8d0")]
 const SEASON_COLOR := [Color("#7acc60"), Color("#ffc840"), Color("#e87030"), Color("#80b0e0")]
-const PLACE_CELL := 88.0      # grid cell width in world units for free placement
+const PLACE_CELL := 64.0      # square grid cell for free placement (S=1x1, M=2x2, L=3x3)
+const OLD_PLACE_CELL := 88.0  # v2/v3.0 grid, used to convert old saves
+const LV_UNIT := 88.0         # land-value radii are expressed in these units
+const CLASS_FILL := {"S": 1.0, "M": 1.15, "L": 1.3}
 # Buildable territory radius per settlement level; roads extend it (see _in_territory).
 const TERRITORY_R := [430.0, 560.0, 700.0, 840.0, 980.0]
 const ROAD_REACH := 150.0     # building cells within this distance of a road are in territory
@@ -238,7 +241,7 @@ const SOURCE_DEFS := {
 }
 
 # Plot classes (footprints in world units) and the fixed plots of the terrace.
-const PLOT_SIZES := {"S": Vector2(80, 80), "M": Vector2(168, 88), "L": Vector2(168, 168)}
+const PLOT_SIZES := {"S": Vector2(60, 60), "M": Vector2(124, 124), "L": Vector2(188, 188)}
 const PLOT_AR := {"S": "صغيرة", "M": "متوسطة", "L": "كبيرة"}
 # v2.0.0: Free placement — no fixed plots. Buildings placed freely on flat plateau, grid-snapped.
 # Zone painting is a separate layer: zones give bonuses, not restrictions.
@@ -247,23 +250,28 @@ const BUILDINGS := {
 	# ── سكن ──
 	"Tent": {
 		"ar": "خيمة", "cls": "S", "lv": 1, "tab": "home", "cat": "res", "cost": {"Wood": 12.0, "Scrap": 4.0},
-		"time": 6.0, "housing": 3, "gather": {}, "xp": 20.0, "scale": 1.0, "upkeep": {},
+		"time": 6.0, "housing": 3, "gather": {}, "xp": 20.0, "scale": 1.0, "upkeep": {}, "hidden": true,
 		"desc": "مأوى مرتجل يتسع لـ3 ناجين."
+	},
+	"Shack": {
+		"ar": "كوخ خشبي", "cls": "S", "lv": 1, "tab": "home", "cat": "res", "cost": {"Wood": 14.0, "Scrap": 3.0},
+		"time": 7.0, "housing": 3, "gather": {}, "xp": 20.0, "scale": 1.0, "upkeep": {"Wood": 0.05}, "soft": true,
+		"desc": "أول بيت بعد الخيام: خشب وصفيح لـ3 ناجين."
 	},
 	"Small House": {
 		"ar": "منزل صغير", "cls": "S", "lv": 1, "tab": "home", "cat": "res", "cost": {"Wood": 16.0, "Stone": 10.0},
 		"time": 10.0, "housing": 4, "gather": {}, "xp": 28.0, "scale": 1.2, "upkeep": {"Wood": 0.05}, "soft": true,
-		"desc": "بيت صغير دائم لـ4 ناجين."
+		"desc": "بيت فلاحي من الطين والجير، باب أزرق وطابون — لـ4 ناجين."
 	},
 	"Stone House": {
 		"ar": "بيت حجري", "cls": "M", "lv": 2, "tab": "home", "cat": "res", "cost": {"Wood": 20.0, "Stone": 22.0},
 		"time": 16.0, "housing": 6, "gather": {}, "xp": 45.0, "scale": 1.9, "upkeep": {"Stone": 0.1}, "soft": true,
-		"desc": "بيت من حجر القدس لـ6 ناجين. يحتاج قيمة أرض جيدة."
+		"desc": "بيت من حجر القدس بقبة ودرج خارجي لـ6 ناجين. يحتاج قيمة أرض جيدة."
 	},
 	"Large House": {
-		"ar": "بيت عائلي", "cls": "L", "lv": 3, "tab": "home", "cat": "res", "cost": {"Stone": 35.0, "Wood": 16.0},
+		"ar": "دار بحوش", "cls": "L", "lv": 3, "tab": "home", "cat": "res", "cost": {"Stone": 35.0, "Wood": 16.0},
 		"time": 22.0, "housing": 10, "gather": {}, "xp": 55.0, "scale": 2.15, "upkeep": {"Stone": 0.15}, "soft": true,
-		"desc": "منزل فلسطيني فسيح لعائلة من 10."
+		"desc": "دار من طابقين حول حوش فيه زيتونة ونافورة — لعائلة من 10."
 	},
 	"Khan": {
 		"ar": "الخان", "cls": "L", "lv": 4, "tab": "home", "cat": "com", "cost": {"Stone": 45.0, "Wood": 22.0, "Dinar": 20.0},
@@ -373,7 +381,7 @@ const BUILDINGS := {
 	# ── ترفيه ──
 	"Plaza": {
 		"ar": "ساحة عامة", "cls": "S", "lv": 2, "tab": "fun", "cat": "any", "cost": {"Stone": 14.0, "Wood": 8.0},
-		"time": 10.0, "housing": 0, "gather": {}, "xp": 28.0, "scale": 1.2, "upkeep": {},
+		"time": 10.0, "housing": 0, "gather": {}, "xp": 28.0, "scale": 0.85, "upkeep": {},
 		"plaza": true,
 		"desc": "فضاء مفتوح يرفع المعنويات ويرفع قيمة الأرض."
 	},
@@ -417,7 +425,7 @@ const BUILDINGS := {
 	},
 	"Wall": {
 		"ar": "سور حجري", "cls": "S", "lv": 3, "tab": "def", "cat": "any", "cost": {"Stone": 20.0},
-		"time": 8.0, "housing": 0, "gather": {}, "xp": 18.0, "scale": 1.0, "upkeep": {"Stone": 0.05}, "soft": true,
+		"time": 8.0, "housing": 0, "gather": {}, "xp": 18.0, "scale": 0.72, "upkeep": {"Stone": 0.05}, "soft": true,
 		"defense": 12.0,
 		"desc": "قطعة سور: دفاع +12 (حتى 8 قطع)."
 	},
@@ -427,7 +435,7 @@ const TABS := [["home", "سكن"], ["agri", "زراعة"], ["ind", "صناعة"]
 const GOALS := [
 	{"key": "workers", "text": "افتح «العمال» وقرّر من يجمع ماذا."},
 	{"key": "well", "text": "ابنِ بئرًا لماء قريب."},
-	{"key": "tent", "text": "ابنِ خيمة لاستقبال ناجين جدد."},
+	{"key": "home", "text": "ابنِ أول بيت حقيقي: كوخ خشبي أو بيت فلاحي."},
 	{"key": "road", "text": "افتح «التخطيط» وارسم طريقًا ترابيًا (المشي عليه أسرع)."},
 	{"key": "storehouse", "text": "ابنِ مخزنًا لتقصير رحلات الجمع."},
 	{"key": "farm", "text": "ابنِ مزرعة لطعام ثابت (تحتاج ماء ري)."},
@@ -536,6 +544,8 @@ class Villager:
 	var phase := 0.0
 	var unit := ""
 	var away := false
+	var anim: AnimationPlayer = null
+	var cur_anim := ""
 
 
 # Simple vector icons drawn in code (no image assets needed).
@@ -683,6 +693,8 @@ var trail_counts := {}
 var trail_mm: MultiMesh
 var trail_used := 0
 var ruin_nodes: Array = []
+var camp_tents_node: Node3D
+var camp_tents_up := true
 
 # ── CS systems state ──────────────────────────────────────────────────────────
 var land_value: Dictionary = {}   # Vector2i(gx,gz) → float 0-100
@@ -700,6 +712,8 @@ var roads: Dictionary = {}        # Vector2i trail cell → ROAD_DIRT / ROAD_PAV
 var road_mm := {}                 # road type → MultiMesh
 var plan_mode := ""               # "", road_dirt, road_paved, road_erase, zone_1..4, zone_erase
 var plan_sheet: PanelContainer
+var plan_bar: PanelContainer
+var plan_bar_label: Label
 var plan_buttons := {}
 var territory_ring: MultiMeshInstance3D
 var coverage_ring: MultiMeshInstance3D
@@ -813,6 +827,7 @@ var missions_list: VBoxContainer
 var menu_layer: Control
 var text_size_btn: Button
 var shadow_btn: Button
+var sfx_btn: Button
 var new_btn: Button
 var over_layer: Control
 var over_label: Label
@@ -847,10 +862,12 @@ func _ready() -> void:
 	_build_plots()
 	_generate_sources()
 	_build_camp()
+	_add_vegetation()
 	_build_trails()
 	_build_roads()
 	_build_camera()
 	_build_lighting()
+	_build_fx()
 	_build_ghost()
 	_build_ui()
 	_create_survivors()
@@ -898,7 +915,6 @@ func _build_world() -> void:
 	add_child(villager_root)
 	_build_sea()
 	_build_land_mesh()
-	_add_olive_groves()
 	_add_geographic_labels()
 
 
@@ -943,56 +959,7 @@ func _build_land_mesh() -> void:
 	terrain_root.add_child(surface)
 
 
-func _add_olive_groves() -> void:
-	var wr := RandomNumberGenerator.new()
-	wr.seed = WORLD_SEED + 1
-	var trunk_mesh := CylinderMesh.new()
-	trunk_mesh.top_radius = 2.4
-	trunk_mesh.bottom_radius = 3.6
-	trunk_mesh.height = 20.0
-	var crown_mesh := SphereMesh.new()
-	crown_mesh.radius = 16.0
-	crown_mesh.height = 22.0
-	var spots: Array[Vector3] = []
-	var groves := 0
-	var tries := 0
-	while groves < 12 and tries < 400:
-		tries += 1
-		var gx := wr.randi_range(7, GRID - 6)
-		var gz := wr.randi_range(2, GRID - 3)
-		if not _is_land(gx, gz):
-			continue
-		if Vector2(Vector2i(gx, gz) - CAMP_CELL).length() < PLATEAU_R1 + 1.5:
-			continue
-		if _grid_vertex(gx, gz).y > 320.0:
-			continue
-		groves += 1
-		var center := _grid_vertex(gx, gz)
-		for k in range(wr.randi_range(5, 9)):
-			var px := center.x + wr.randf_range(-85.0, 85.0)
-			var pz := center.z + wr.randf_range(-85.0, 85.0)
-			spots.append(Vector3(px, _height_at_world(px, pz), pz))
-	var trunks := MultiMesh.new()
-	trunks.transform_format = MultiMesh.TRANSFORM_3D
-	trunks.mesh = trunk_mesh
-	trunks.instance_count = spots.size()
-	var crowns := MultiMesh.new()
-	crowns.transform_format = MultiMesh.TRANSFORM_3D
-	crowns.mesh = crown_mesh
-	crowns.instance_count = spots.size()
-	for i in range(spots.size()):
-		var s := wr.randf_range(0.8, 1.2)
-		var basis := Basis.from_scale(Vector3(s, s, s))
-		trunks.set_instance_transform(i, Transform3D(basis, spots[i] + Vector3(0.0, 10.0 * s, 0.0)))
-		crowns.set_instance_transform(i, Transform3D(basis, spots[i] + Vector3(0.0, 27.0 * s, 0.0)))
-	var trunk_node := MultiMeshInstance3D.new()
-	trunk_node.multimesh = trunks
-	trunk_node.material_override = _mat(Color("#6b553c"))
-	terrain_root.add_child(trunk_node)
-	var crown_node := MultiMeshInstance3D.new()
-	crown_node.multimesh = crowns
-	crown_node.material_override = _mat(Color("#7d8a58"))
-	terrain_root.add_child(crown_node)
+
 
 
 func _add_geographic_labels() -> void:
@@ -1024,9 +991,7 @@ func _build_camp() -> void:
 	camp.position = Vector3(camp_pos.x, plateau_h, camp_pos.z)
 	terrain_root.add_child(camp)
 	# fire ring of stones
-	for i in range(9):
-		var a := TAU * float(i) / 9.0
-		_box(camp, Vector3(7, 5, 7), Vector3(cos(a) * 15.0, 2.5, sin(a) * 15.0), Color("#ffffff"), true)
+	_prop(camp, "nature/campfire_stones", 6.0, Vector3.ZERO)
 	_cyl(camp, 10.0, 11.0, 2.0, Vector3(0, 1, 0), Color("#3d3530"))
 	var flame := _cyl(camp, 0.0, 7.0, 20.0, Vector3(0, 12, 0), Color("#ff9a3c"))
 	var fm := StandardMaterial3D.new()
@@ -1035,17 +1000,27 @@ func _build_camp() -> void:
 	fm.emission = Color("#ff7a1a")
 	fm.emission_energy_multiplier = 1.4
 	flame.material_override = fm
-	# two patched starting tents
+	# two patched starting tents (folded away once everyone lives in a real house)
+	camp_tents_node = Node3D.new()
+	camp_tents_node.set_meta("nobake", true)
+	camp.add_child(camp_tents_node)
 	for sx in [-100.0, 100.0]:
 		var t := _make_tent_model()
 		t.position = Vector3(sx, 0, -75)
 		t.rotation_degrees.y = 180.0
-		camp.add_child(t)
+		camp_tents_node.add_child(t)
+	_bake_static(camp_tents_node)
 	# salvaged supplies by the fire
-	_box(camp, Vector3(14, 10, 12), Vector3(34, 5, 28), Color("#8a6a40"))
-	_box(camp, Vector3(12, 8, 10), Vector3(44, 14, 26), Color("#9a7a50"))
-	_sphere(camp, 6.0, Vector3(-30, 6, 32), Color("#c8b48c"))
-	_sphere(camp, 5.5, Vector3(-38, 5, 26), Color("#c8b48c"))
+	_prop(camp, "survival/box-large", 14.0, Vector3(34, 0, 28), 20.0)
+	_prop(camp, "survival/box", 9.0, Vector3(46, 0, 22), -15.0)
+	_prop(camp, "survival/barrel", 15.0, Vector3(-32, 0, 30))
+	_prop(camp, "survival/barrel-open", 13.0, Vector3(-44, 0, 22))
+	_prop(camp, "survival/bedroll", 5.0, Vector3(-26, 0, -30), 70.0)
+	_prop(camp, "survival/bedroll", 5.0, Vector3(24, 0, -34), -60.0)
+	_prop(camp, "survival/resource-wood", 10.0, Vector3(18, 0, 40), 35.0)
+	_prop(camp, "survival/signpost", 22.0, Vector3(60, 0, -10), -30.0)
+	_bake_static(camp)
+	_smoke_puffs(camp, Vector3(0, 22, 0), 10, Color("#bdb6aa"), 10.0, 4.5, false)
 	# ruins of the old town around the terrace edge (the disaster)
 	var wr := RandomNumberGenerator.new()
 	wr.seed = WORLD_SEED + 7
@@ -1058,6 +1033,11 @@ func _build_camp() -> void:
 		piece.rotation_degrees.y = wr.randf_range(0.0, 360.0)
 		terrain_root.add_child(piece)
 		ruin_nodes.append(piece)
+		if i % 4 == 1:
+			_prop(piece, "nature/statue_columnDamaged", 30.0, Vector3(22, 0, 10))
+			_prop(piece, "nature/statue_block", 9.0, Vector3(-18, 0, -6), 25.0)
+		elif i % 4 == 3:
+			_prop(piece, "nature/statue_column", 44.0, Vector3(-16, 0, 14))
 		match i % 3:
 			0:
 				_box(piece, Vector3(44, 20, 8), Vector3(0, 8, 0), Color("#d9cdb0"), true)
@@ -1070,10 +1050,16 @@ func _build_camp() -> void:
 				_cyl(piece, 2.0, 2.4, 26.0, Vector3(0, 12, 0), Color("#2f2a25"))
 				var beam := _box(piece, Vector3(30, 3, 3), Vector3(6, 4, 4), Color("#2f2a25"))
 				beam.rotation_degrees.y = 30.0
+		_bake_static(piece)
 
 
 func _make_tent_model() -> Node3D:
 	var m := Node3D.new()
+	if _asset_scene("nature/tent_detailedOpen") != null:
+		_prop(m, "nature/tent_detailedOpen", 34.0, Vector3.ZERO, 0.0, TENT_TINT)
+		_prop(m, "survival/bedroll", 4.0, Vector3(14, 0, 26), 80.0)
+		_prop(m, "survival/bucket", 5.0, Vector3(-18, 0, 24))
+		return m
 	var cloth := _prism(m, Vector3(52, 34, 50), Vector3(0, 17, 0), Color("#d8c9a2"))
 	cloth.rotation_degrees.y = 90.0
 	var patch := _box(m, Vector3(16, 12, 1), Vector3(-12, 13, 18), Color("#9b6b4b"))
@@ -1138,8 +1124,13 @@ func _grid_to_world(gx: int, gz: int) -> Vector3:
 
 
 # Footprints: S = 1 cell, M = 2×1 (along x), L = 2×2. The anchor is the lowest cell.
+func _fp_size(cls: String) -> int:
+	return 1 if cls == "S" else (2 if cls == "M" else 3)
+
+
 func _fp_offset(cls: String) -> Vector2:
-	return Vector2(0.0 if cls == "S" else 0.5, 0.5 if cls == "L" else 0.0)
+	var o := float(_fp_size(cls) - 1) * 0.5
+	return Vector2(o, o)
 
 
 func _anchor_from_world(wx: float, wz: float, cls: String) -> Vector2i:
@@ -1166,17 +1157,10 @@ func _footprint_heights(center: Vector2, size: Vector2) -> Vector2:
 
 func _cells_for(gx: int, gz: int, cls: String) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
-	match cls:
-		"S":
-			cells.append(Vector2i(gx, gz))
-		"M":
-			cells.append(Vector2i(gx, gz))
-			cells.append(Vector2i(gx + 1, gz))
-		"L":
-			cells.append(Vector2i(gx, gz))
-			cells.append(Vector2i(gx + 1, gz))
-			cells.append(Vector2i(gx, gz + 1))
-			cells.append(Vector2i(gx + 1, gz + 1))
+	var n := _fp_size(cls)
+	for dx in range(n):
+		for dz in range(n):
+			cells.append(Vector2i(gx + dx, gz + dz))
 	return cells
 
 
@@ -1291,8 +1275,6 @@ func _facing_for(center: Vector2, cls: String) -> float:
 	var dir := target - center
 	if dir.length() < 1.0:
 		return 0.0
-	if cls == "M":
-		return 0.0 if dir.y >= 0.0 else 180.0
 	if absf(dir.x) > absf(dir.y):
 		return 90.0 if dir.x > 0.0 else 270.0
 	return 0.0 if dir.y >= 0.0 else 180.0
@@ -1304,6 +1286,7 @@ func _clear_ruins_near(center: Vector2, size: Vector2) -> void:
 		if is_instance_valid(rn) and rn.visible:
 			if absf(rn.position.x - center.x) < size.x * 0.5 + 30.0 and absf(rn.position.z - center.y) < size.y * 0.5 + 30.0:
 				rn.visible = false
+	_hide_scatter_near(center, size)
 func _create_dynamic_plot(gx: int, gz: int, cls: String) -> Plot:
 	var p := Plot.new()
 	p.idx = plots.size()
@@ -1387,10 +1370,11 @@ func _update_land_value() -> void:
 		var delta := float(d["delta"]) * float(s[2])
 		var sp: Vector2 = s[1]
 		var cc := _world_to_grid(sp.x, sp.y)
-		for dx in range(-radius - 1, radius + 2):
-			for dz in range(-radius - 1, radius + 2):
+		var rc := int(ceil(float(radius + 1) * LV_UNIT / PLACE_CELL))
+		for dx in range(-rc, rc + 1):
+			for dz in range(-rc, rc + 1):
 				var cell := cc + Vector2i(dx, dz)
-				var dist := _cell_world(cell).distance_to(sp) / PLACE_CELL
+				var dist := _cell_world(cell).distance_to(sp) / LV_UNIT
 				var falloff := 1.0 - dist / (float(radius) + 1.0)
 				if falloff <= 0.0:
 					continue
@@ -1677,29 +1661,56 @@ func _speed_at(flat: Vector3) -> float:
 	return 1.0
 
 
+const PLAN_AR := {
+	"road_dirt": "طريق ترابي — اسحب إصبعك على الأرض (مجاني، المشي أسرع 45%)",
+	"road_paved": "طريق مرصوف — اسحب على الأرض (2 حجر لكل قطعة، أسرع 90%)",
+	"road_erase": "إزالة الطرق — اسحب فوق الطريق",
+	"zone_1": "منطقة سكنية — اسحب لتلوين الأرض بالأخضر",
+	"zone_2": "منطقة تجارية — اسحب لتلوين الأرض بالأزرق",
+	"zone_3": "منطقة صناعية — اسحب لتلوين الأرض بالبرتقالي",
+	"zone_4": "منطقة زراعية — اسحب لتلوين الأرض بالأصفر",
+	"zone_erase": "مسح المناطق — اسحب فوق المنطقة",
+}
+
+
 func _set_plan_mode(mode: String) -> void:
 	plan_mode = "" if plan_mode == mode else mode
 	if plan_mode == "road_paved" and level < 3:
 		plan_mode = ""
 		_toast("الطرق المرصوفة تُفتح في المستوى 3.")
-	_show_territory(plan_mode != "")
+	_show_territory(plan_mode != "" or (is_instance_valid(plan_sheet) and plan_sheet.visible))
 	_refresh_zone_overlay()
 	_refresh_plan_buttons()
-	match plan_mode:
-		"road_dirt":
-			_toast("اسحب إصبعك على الأرض لرسم طريق ترابي مجاني (+45% سرعة مشي). الطرق تمدّ حدود البناء.", 5.0)
-		"road_paved":
-			_toast("طريق مرصوف: %d حجر لكل قطعة، سرعة +90%% وقيمة أرض أعلى." % int(PAVED_COST), 5.0)
-		"road_erase":
-			_toast("اسحب على الطرق لإزالتها.", 3.0)
-		"zone_erase":
-			_toast("اسحب لمسح تقسيم المناطق.", 3.0)
-		"":
-			pass
-		_:
-			if plan_mode.begins_with("zone_"):
-				var z := int(plan_mode.substr(5))
-				_toast("اسحب لتحديد منطقة %s. المباني المطابقة فيها تحصل على +20%%." % ZONE_AR[z], 5.0)
+	if not is_instance_valid(plan_bar):
+		return
+	if plan_mode != "":
+		# Painting: free the whole screen except a slim tool bar.
+		plan_sheet.visible = false
+		dock.visible = false
+		plan_bar.visible = true
+		plan_bar_label.text = str(PLAN_AR.get(plan_mode, ""))
+	else:
+		plan_bar.visible = false
+		if selected_building == "" and inspected == null:
+			dock.visible = true
+
+
+func _plan_change_tool() -> void:
+	if plan_mode != "":
+		_set_plan_mode(plan_mode)
+	plan_sheet.visible = true
+	_fit_sheet(plan_sheet)
+	_show_territory(true)
+	_refresh_plan_buttons()
+
+
+func _plan_done() -> void:
+	if plan_mode != "":
+		_set_plan_mode(plan_mode)
+	plan_sheet.visible = false
+	plan_bar.visible = false
+	_show_territory(false)
+	dock.visible = true
 
 
 var _plan_toast_time := 0
@@ -1860,6 +1871,7 @@ func _generate_sources() -> void:
 			s.slots = 3
 			s.regen = float(d["regen"])
 			s.node = _make_source_visual(res)
+			_bake_static(s.node)
 			s.node.position = s.pos
 			source_root.add_child(s.node)
 			sources.append(s)
@@ -1896,10 +1908,6 @@ func _make_building_model(type: String) -> Node3D:
 			roof.rotation_degrees.x = 4.0
 			_arch(m, -12, 0, 14, 19, 21.5, door)
 			_arch(m, 12, 0, 14, 19, 21.5, door)
-			for p in [Vector3(-22, 5, 28), Vector3(-14, 5, 30), Vector3(-18, 12, 29)]:
-				_sphere(m, 5.0, p, Color("#d8c29a"))
-			_box(m, Vector3(10, 8, 10), Vector3(22, 4, 28), wood)
-			_box(m, Vector3(10, 8, 10), Vector3(22, 12, 28), Color("#9a7a50"))
 		"Farm":
 			for i in range(3):
 				var h := 4.0 + 4.0 * float(i)
@@ -1915,19 +1923,24 @@ func _make_building_model(type: String) -> Node3D:
 			_box(m, Vector3(60, 4, 3), Vector3(0, 2, -27), Color.WHITE, true)
 			_box(m, Vector3(3, 4, 54), Vector3(30, 2, 0), Color.WHITE, true)
 			_box(m, Vector3(3, 4, 54), Vector3(-30, 2, 0), Color.WHITE, true)
-			for p in [Vector3(-17, 0, -13), Vector3(17, 0, -13), Vector3(0, 0, 0), Vector3(-17, 0, 13), Vector3(17, 0, 13)]:
-				_cyl(m, 1.8, 2.8, 11.0, p + Vector3(0, 5.5, 0), Color("#7a6648"))
-				_sphere(m, 7.5, p + Vector3(-2, 15, 0), Color("#7d8f5a"))
-				_sphere(m, 6.0, p + Vector3(3, 17, 2), Color("#6d7d4c"))
 		"Stone House":
-			_box(m, Vector3(46, 28, 40), Vector3(0, 14, 0), Color.WHITE, true)
-			_box(m, Vector3(50, 3, 44), Vector3(0, 29.5, 0), cream, true)
-			_parapet(m, 50.0, 44.0, 31.0)
-			_dome(m, 12.0, Vector3(-8, 31, -5))
-			_arch(m, 0, 0, 13, 20, 20.5, door)
-			_arch(m, -14, 10, 7, 11, 20.5, window)
-			_arch(m, 14, 10, 7, 11, 20.5, window)
-			_box(m, Vector3(3, 14, 3), Vector3(18, 38, 12), Color("#2f6f2f"))
+			# Village stone house: cube with a big dome, outside stair to the roof, walled front yard
+			var green_door := Color("#2f6b5a")
+			_box(m, Vector3(40, 24, 36), Vector3(-4, 12, -6), Color.WHITE, true)
+			_box(m, Vector3(42, 2.5, 38), Vector3(-4, 25, -6), cream, true)
+			_dome(m, 14.0, Vector3(-4, 26, -6))
+			_cyl(m, 2.0, 2.0, 4.0, Vector3(-4, 40, -6), cream, true)
+			for k in range(6):
+				_box(m, Vector3(8, 4.0 * float(k + 1), 5.5), Vector3(20, 2.0 * float(k + 1), 10.0 - 5.5 * float(k)), Color.WHITE, true)
+			_arch(m, -12, 0, 11, 17, 12.2, green_door)
+			_arch(m, 6, 9, 7, 10, 12.2, window)
+			_box(m, Vector3(3, 10, 1.2), Vector3(1.0, 13.5, 12.6), green_door)
+			_box(m, Vector3(3, 10, 1.2), Vector3(11.0, 13.5, 12.6), green_door)
+			_box(m, Vector3(20, 6, 2.5), Vector3(-17, 3, 26), Color.WHITE, true)
+			_box(m, Vector3(20, 6, 2.5), Vector3(13, 3, 26), Color.WHITE, true)
+			_box(m, Vector3(2.5, 6, 14), Vector3(-26, 3, 19), Color.WHITE, true)
+			_prop(m, "nature/tree_oak", 16.0, Vector3(-18, 0, 19), 30.0, OLIVE_TINT)
+			_prop(m, "nature/pot_large", 4.0, Vector3(4, 0, 18))
 		"Quarry":
 			_box(m, Vector3(56, 7, 22), Vector3(0, 3.5, -15), Color.WHITE, true)
 			_box(m, Vector3(42, 6, 18), Vector3(0, 10, -17), cream, true)
@@ -1948,12 +1961,24 @@ func _make_building_model(type: String) -> Node3D:
 			awning.rotation_degrees.x = -12.0
 			_box(m, Vector3(10, 6, 8), Vector3(-17, 3, 26), Color("#5b5b5b"))
 		"Small House":
-			_box(m, Vector3(32, 20, 28), Vector3(0, 10, 0), Color.WHITE, true)
-			_box(m, Vector3(36, 2.5, 32), Vector3(0, 22.5, 0), cream, true)
-			_parapet(m, 36.0, 32.0, 23.5)
-			_arch(m, 0, 0, 9, 14, 15.0, door)
-			_arch(m, -10, 8, 5, 8, 15.0, window)
-			_arch(m, 10, 8, 5, 8, 15.0, window)
+			# Fellahin house: lime-plastered mud walls, blue door, taboon oven, rooftop water tank
+			var plaster := Color("#e7d2a6")
+			var plaster2 := Color("#d6ba86")
+			var blue := Color("#3b6f93")
+			_box(m, Vector3(34, 19, 28), Vector3(0, 9.5, -4), plaster)
+			_box(m, Vector3(36, 1.8, 30), Vector3(0, 19.6, -4), plaster2)
+			for side in [-1.0, 1.0]:
+				_box(m, Vector3(36, 2.5, 1.6), Vector3(0, 21.5, -4.0 + side * 14.2), plaster2)
+				_box(m, Vector3(1.6, 2.5, 30), Vector3(side * 17.2, 21.5, -4), plaster2)
+			_box(m, Vector3(8, 13, 1.4), Vector3(-6, 6.5, 10.3), blue)
+			_box(m, Vector3(10, 1.5, 1.6), Vector3(-6, 13.6, 10.4), plaster2)
+			_box(m, Vector3(5, 5, 1.4), Vector3(9, 11, 10.3), blue)
+			_cyl(m, 3.4, 3.4, 6.0, Vector3(9, 23.8, -10), Color("#2f3438"))
+			var taboon := _sphere(m, 6.0, Vector3(13, 0, 19), Color("#a8744a"))
+			taboon.scale = Vector3(1.0, 0.75, 1.0)
+			_box(m, Vector3(3, 3, 1.5), Vector3(13, 2, 24.5), Color("#3a2a20"))
+			_sphere(m, 3.2, Vector3(-14, 3.2, 17), Color("#b5703f"))
+			_sphere(m, 2.6, Vector3(-9, 2.6, 19), Color("#b5703f"))
 		"Small Quarry":
 			_box(m, Vector3(34, 5, 16), Vector3(0, 2.5, -8), Color.WHITE, true)
 			_box(m, Vector3(24, 4, 12), Vector3(0, 8, -10), cream, true)
@@ -1999,16 +2024,32 @@ func _make_building_model(type: String) -> Node3D:
 			_cyl(m, 3.0, 3.0, 36.0, Vector3(10, 10, 6), Color.WHITE, true)
 			_box(m, Vector3(4, 4, 4), Vector3(-12, 2, -10), Color("#c04820"))
 		"Large House":
-			_box(m, Vector3(56, 30, 48), Vector3(0, 15, 0), Color.WHITE, true)
-			_box(m, Vector3(60, 3, 52), Vector3(0, 31.5, 0), cream, true)
-			_parapet(m, 60.0, 52.0, 33.0)
-			_dome(m, 14.0, Vector3(-10, 33, -10))
-			_dome(m, 11.0, Vector3(14, 33, 8))
-			_arch(m, 0, 0, 14, 22, 24.5, door)
-			_arch(m, -18, 10, 8, 12, 24.5, window)
-			_arch(m, 18, 10, 8, 12, 24.5, window)
-			_arch(m, 0, 10, 8, 12, 24.5, window)
-			_box(m, Vector3(4, 20, 4), Vector3(22, 42, 18), Color("#3a7a3a"))
+			# Courtyard house (dar with hosh): two-storey back wing, side wings, arcade, courtyard olive and fountain
+			var mash := Color("#6b4a2e")
+			_box(m, Vector3(62, 30, 16), Vector3(0, 15, -23), Color.WHITE, true)
+			_box(m, Vector3(64, 2.5, 18), Vector3(0, 31, -23), cream, true)
+			_box(m, Vector3(15, 20, 30), Vector3(-23.5, 10, 0), Color.WHITE, true)
+			_box(m, Vector3(15, 20, 30), Vector3(23.5, 10, 0), Color.WHITE, true)
+			_box(m, Vector3(16, 2, 31), Vector3(-23.5, 20.8, 0), cream, true)
+			_box(m, Vector3(16, 2, 31), Vector3(23.5, 20.8, 0), cream, true)
+			_dome(m, 7.0, Vector3(-23.5, 21.5, 0))
+			_dome(m, 7.0, Vector3(23.5, 21.5, 0))
+			_box(m, Vector3(22, 10, 3), Vector3(-20, 5, 28), Color.WHITE, true)
+			_box(m, Vector3(22, 10, 3), Vector3(20, 5, 28), Color.WHITE, true)
+			_arch(m, 0, 0, 13, 15, 29.6, door)
+			_box(m, Vector3(32, 1, 30), Vector3(0, 0.6, 2), Color("#d9c9a2"))
+			for k in range(4):
+				_cyl(m, 1.5, 1.5, 13.0, Vector3(-13.5 + 9.0 * float(k), 6.5, -13.5), Color.WHITE, true)
+			_box(m, Vector3(34, 3, 3), Vector3(0, 14, -13.5), cream, true)
+			for k2 in range(3):
+				_box(m, Vector3(8, 8, 3), Vector3(-18.0 + 18.0 * float(k2), 22, -14.5), mash)
+				_box(m, Vector3(9, 1.2, 4), Vector3(-18.0 + 18.0 * float(k2), 26.6, -14.0), mash)
+			for k3 in range(3):
+				_arch(m, -20.0 + 20.0 * float(k3), 4, 6, 9, -31.2, window)
+			_prop(m, "nature/tree_default", 18.0, Vector3(-7, 1, 6), 0.0, OLIVE_TINT)
+			_cyl(m, 4.5, 4.5, 3.0, Vector3(8, 2, 9), Color.WHITE, true)
+			_cyl(m, 3.6, 3.6, 0.8, Vector3(8, 3.6, 9), Color("#4aa3d9"))
+			_cyl(m, 3.0, 3.0, 6.0, Vector3(22, 35, -26), Color("#2f3438"))
 		"Diwan":
 			_box(m, Vector3(60, 28, 50), Vector3(0, 14, 0), Color.WHITE, true)
 			_box(m, Vector3(66, 3.5, 56), Vector3(0, 29.5, 0), cream, true)
@@ -2115,9 +2156,6 @@ func _make_building_model(type: String) -> Node3D:
 			# Small bell tower
 			_box(m, Vector3(10, 22, 10), Vector3(20, 11, -16), Color.WHITE, true)
 			_box(m, Vector3(12, 3, 12), Vector3(20, 24, -16), Color("#8a7850"))
-			# Courtyard tree
-			_cyl(m, 2.0, 3.0, 14.0, Vector3(-18, 7, 14), Color("#6a5038"))
-			_sphere(m, 8.0, Vector3(-18, 18, 14), Color("#5a7a3a"))
 		"Town Square":
 			# Central paved area
 			_box(m, Vector3(68, 2, 62), Vector3(0, 1, 0), Color("#d8caa8"))
@@ -2129,10 +2167,6 @@ func _make_building_model(type: String) -> Node3D:
 			# Central decorative column/fountain
 			_cyl(m, 5.0, 5.0, 18.0, Vector3(0, 9, 0), Color.WHITE, true)
 			_sphere(m, 6.0, Vector3(0, 22, 0), Color("#4a9aaa"))
-			# Corner olive trees
-			for tp in [Vector3(-20, 0, -16), Vector3(20, 0, -16), Vector3(-20, 0, 16), Vector3(20, 0, 16)]:
-				_cyl(m, 2.0, 2.8, 12.0, tp + Vector3(0, 6, 0), Color("#7a6648"))
-				_sphere(m, 6.0, tp + Vector3(0, 16, 0), Color("#6a8050"))
 			# Bench stones
 			for bp in [Vector3(-14, 3, 22), Vector3(14, 3, 22)]:
 				_box(m, Vector3(14, 5, 5), bp, Color.WHITE, true)
@@ -2169,12 +2203,6 @@ func _make_building_model(type: String) -> Node3D:
 				var bx := sin(deg_to_rad(angle)) * 22.0
 				var bz := cos(deg_to_rad(angle)) * 22.0
 				_box(m, Vector3(12, 5, 5), Vector3(bx, 3, bz), Color.WHITE, true)
-			# Olive trees at four points
-			for ta in [45, 135, 225, 315]:
-				var tx := sin(deg_to_rad(float(ta))) * 26.0
-				var tz := cos(deg_to_rad(float(ta))) * 26.0
-				_cyl(m, 1.8, 2.5, 10.0, Vector3(tx, 5, tz), Color("#7a6648"))
-				_sphere(m, 5.5, Vector3(tx, 14, tz), Color("#6a8050"))
 		"Library":
 			# Stone hall with rows of arched windows
 			_box(m, Vector3(50, 26, 44), Vector3(0, 13, 0), Color.WHITE, true)
@@ -2194,6 +2222,27 @@ func _make_building_model(type: String) -> Node3D:
 			# Scroll/book shelves hint on side
 			for row_l in range(3):
 				_box(m, Vector3(3, 8, 32), Vector3(-24, float(row_l) * 9 + 5, 0), Color("#8a6a40"))
+		"Shack":
+			# Wooden shack with a tin roof and porch
+			var plank := Color("#8a6844")
+			var plank2 := Color("#a07c50")
+			var tin := Color("#98a1a6")
+			_box(m, Vector3(38, 17, 28), Vector3(0, 8.5, -4), plank)
+			for k in range(5):
+				_box(m, Vector3(1.1, 17.2, 28.4), Vector3(-15.0 + 7.5 * float(k), 8.5, -4), plank2)
+			var roof := _box(m, Vector3(44, 1.8, 36), Vector3(0, 20, -3), tin)
+			roof.rotation_degrees.x = -9.0
+			var patch := _box(m, Vector3(11, 2.0, 9), Vector3(-10, 20.6, 2), Color("#a0583a"))
+			patch.rotation_degrees.x = -9.0
+			_box(m, Vector3(8, 12, 1.4), Vector3(-6, 6, 10.3), door)
+			_box(m, Vector3(7, 5, 1.4), Vector3(9, 10, 10.3), window)
+			_box(m, Vector3(38, 1.4, 9), Vector3(0, 0.7, 15), plank2)
+			_cyl(m, 0.8, 0.8, 14.0, Vector3(-17, 7, 19), plank)
+			_cyl(m, 0.8, 0.8, 14.0, Vector3(17, 7, 19), plank)
+			var awn := _box(m, Vector3(40, 1.0, 10), Vector3(0, 14.5, 15.5), tin)
+			awn.rotation_degrees.x = 10.0
+			_prop(m, "survival/barrel", 9.0, Vector3(19, 0, 2))
+			_prop(m, "survival/bucket", 4.0, Vector3(-14, 1.4, 16))
 		"Woodcutter":
 			_box(m, Vector3(30, 16, 24), Vector3(0, 8, -6), wood)
 			var wroof := _prism(m, Vector3(36, 12, 30), Vector3(0, 22, -6), Color("#6b4f33"))
@@ -2244,13 +2293,106 @@ func _make_building_model(type: String) -> Node3D:
 			_cyl(m, 1.0, 1.0, 34.0, Vector3(24, 34, -20), wood)
 			_box(m, Vector3(13, 8, 1.2), Vector3(30.5, 46, -20), Color("#2f6f3a"))
 		"Wall":
-			_box(m, Vector3(78, 26, 12), Vector3(0, 13, 0), Color.WHITE, true)
-			for k in range(7):
-				_box(m, Vector3(7, 6, 13), Vector3(-33.0 + 11.0 * float(k), 29, 0), Color.WHITE, true)
+			var cw := _stone_asset("castle/wall", 30.0)
+			cw.scale = Vector3(64.0, 30.0 / 1.31, 16.0)
+			m.add_child(cw)
 			_box(m, Vector3(14, 34, 17), Vector3(-34, 17, 0), cream, true)
 			_box(m, Vector3(14, 34, 17), Vector3(34, 17, 0), cream, true)
 			_arch(m, 0, 2, 4, 8, 6.2, window)
+	_decorate_building(m, type)
 	return m
+
+
+# Props from the CC0 kits on top of the procedural stone architecture (positions in model units).
+func _decorate_building(m: Node3D, type: String) -> void:
+	match type:
+		"Farm":
+			for i in range(3):
+				var h := 4.0 + 4.0 * float(i)
+				var z := 18.0 - 18.0 * float(i)
+				for k in range(-2, 3):
+					_prop(m, "nature/crops_wheatStageB", 7.0, Vector3(float(k) * 10.5, h + 2.0, z), float(k) * 37.0)
+			_prop(m, "survival/bucket", 4.0, Vector3(-22, 0, 27))
+		"Olive Grove":
+			var spots := [Vector3(-17, 0, -13), Vector3(17, 0, -13), Vector3(0, 0, 0), Vector3(-17, 0, 13), Vector3(17, 0, 13)]
+			for si in range(spots.size()):
+				_prop(m, ["nature/tree_default", "nature/tree_oak", "nature/tree_fat"][si % 3], 19.0, spots[si], float(si) * 71.0, OLIVE_TINT)
+			_prop(m, "survival/box-open", 5.0, Vector3(22, 0, 24), 15.0)
+		"Pen":
+			_prop(m, "nature/plant_bushLarge", 6.0, Vector3(14, 2, 8))
+			_prop(m, "survival/bucket", 4.0, Vector3(6, 2, -4))
+			_prop(m, "survival/resource-planks", 4.0, Vector3(-4, 2, 12), 30.0)
+		"Storehouse":
+			_prop(m, "survival/barrel", 9.0, Vector3(-22, 0, 28))
+			_prop(m, "survival/barrel", 9.0, Vector3(-14, 0, 31))
+			_prop(m, "survival/box-large", 9.0, Vector3(22, 0, 29), 10.0)
+			_prop(m, "survival/box", 6.0, Vector3(14, 0, 32), -20.0)
+		"Small Quarry":
+			_prop(m, "nature/rock_largeB", 7.0, Vector3(-4, 0, 6), 20.0)
+			_prop(m, "survival/tool-pickaxe", 7.0, Vector3(10, 0, 12), 60.0)
+			_prop(m, "survival/resource-stone", 5.0, Vector3(-14, 0, 12))
+		"Quarry":
+			_prop(m, "nature/rock_largeA", 9.0, Vector3(-16, 0, 6), 30.0)
+			_prop(m, "nature/rock_tallA", 14.0, Vector3(20, 0, -6), -10.0)
+			_prop(m, "survival/resource-stone-large", 7.0, Vector3(4, 0, 16))
+			_prop(m, "survival/tool-pickaxe", 7.0, Vector3(-4, 0, 20), 40.0)
+		"Woodcutter":
+			_prop(m, "nature/log_stackLarge", 9.0, Vector3(-10, 0, 16), 90.0)
+			_prop(m, "nature/stump_round", 4.0, Vector3(13, 0, 14))
+			_prop(m, "survival/tool-axe", 7.0, Vector3(13, 4, 14), 20.0)
+		"Workshop":
+			_prop(m, "survival/workbench-anvil", 9.0, Vector3(-16, 0, 26), 180.0)
+			_prop(m, "survival/metal-panel-screws", 10.0, Vector3(18, 0, 24), 160.0)
+			_prop(m, "survival/barrel", 8.0, Vector3(24, 0, 18))
+		"Olive Press":
+			_prop(m, "survival/barrel", 8.0, Vector3(-16, 0, 22))
+			_prop(m, "survival/barrel", 8.0, Vector3(-9, 0, 24))
+			_prop(m, "nature/pot_large", 7.0, Vector3(16, 0, 22))
+		"Kitchen":
+			_prop(m, "nature/pot_large", 7.0, Vector3(-18, 0, 24))
+			_prop(m, "survival/barrel-open", 8.0, Vector3(20, 0, 22))
+		"Market":
+			_prop(m, "nature/pot_large", 6.0, Vector3(-27, 0, 20))
+			_prop(m, "nature/pot_small", 4.0, Vector3(27, 0, 21))
+			_prop(m, "survival/box", 5.0, Vector3(-28, 0, 12), 20.0)
+			_prop(m, "survival/barrel", 7.0, Vector3(28, 0, 12))
+		"Fishing Dock":
+			_prop(m, "nature/canoe", 4.0, Vector3(-18, 0, -36), 10.0)
+			_prop(m, "nature/canoe", 4.0, Vector3(18, 0, -40), -15.0)
+			_prop(m, "survival/fish-large", 3.0, Vector3(6, 3, -14), 40.0)
+			_prop(m, "survival/barrel", 7.0, Vector3(-4, 3, -10))
+		"Barracks":
+			for k in range(3):
+				_prop(m, "survival/fence-fortified", 10.0, Vector3(-18.0 + float(k) * 18.0, 0, 24), 0.0)
+			_prop(m, "castle/flag-banner-long", 22.0, Vector3(-24, 23, -20))
+		"Watchtower":
+			_prop(m, "castle/flag-pennant", 16.0, Vector3(-6, 76, -6))
+		"Mosque":
+			_prop(m, "nature/tree_palmTall", 34.0, Vector3(24, 0, 20))
+			_prop(m, "nature/pot_large", 5.0, Vector3(-10, 0, 24))
+			_prop(m, "nature/pot_large", 5.0, Vector3(10, 0, 24))
+		"Clinic":
+			_prop(m, "nature/pot_small", 4.0, Vector3(-9, 0, 23))
+			_prop(m, "nature/pot_small", 4.0, Vector3(9, 0, 23))
+		"Diwan":
+			_prop(m, "nature/tree_palmTall", 34.0, Vector3(-34, 0, 30))
+			_prop(m, "nature/tree_palmTall", 34.0, Vector3(34, 0, 30))
+		"School":
+			_prop(m, "nature/tree_oak", 18.0, Vector3(-18, 0, 14), 0.0, OLIVE_TINT)
+		"Town Square":
+			for tp in [Vector3(-20, 0, -16), Vector3(20, 0, -16), Vector3(-20, 0, 16), Vector3(20, 0, 16)]:
+				_prop(m, "nature/tree_default", 18.0, tp + Vector3(0, 2, 0), tp.x * 3.0, OLIVE_TINT)
+		"Plaza":
+			for ta in [45, 135, 225, 315]:
+				var tx := sin(deg_to_rad(float(ta))) * 26.0
+				var tz := cos(deg_to_rad(float(ta))) * 26.0
+				_prop(m, "nature/tree_oak", 15.0, Vector3(tx, 2, tz), float(ta), OLIVE_TINT)
+			for fa in range(8):
+				var fx := sin(float(fa) * TAU / 8.0) * 14.0
+				var fz := cos(float(fa) * TAU / 8.0) * 14.0
+				_prop(m, "nature/flower_redA", 3.0, Vector3(fx, 3, fz), float(fa) * 40.0, ANEMONE_TINT)
+		"Well":
+			_prop(m, "survival/bucket", 4.0, Vector3(14, 0, 14))
 
 
 func _make_scaffold(w: float, d: float) -> Node3D:
@@ -2294,6 +2436,7 @@ func _load_settings() -> void:
 	if cf.load(SETTINGS_PATH) == OK:
 		text_size_index = clampi(int(cf.get_value("ui", "text_size", 1)), 0, TEXT_SIZES.size() - 1)
 		shadows_on = bool(cf.get_value("gfx", "shadows", true))
+		sfx_on = bool(cf.get_value("audio", "sfx", true))
 	_apply_text_size()
 
 
@@ -2305,6 +2448,7 @@ func _save_settings() -> void:
 	var cf := ConfigFile.new()
 	cf.set_value("ui", "text_size", text_size_index)
 	cf.set_value("gfx", "shadows", shadows_on)
+	cf.set_value("audio", "sfx", sfx_on)
 	cf.save(SETTINGS_PATH)
 
 
@@ -2401,6 +2545,7 @@ func _button(text: String, cb: Callable, min_size: Vector2 = Vector2(0, 60), fsi
 func _guarded(cb: Callable) -> void:
 	if scroll_dragged:
 		return
+	_sfx("click", -12.0)
 	cb.call()
 
 
@@ -2840,6 +2985,8 @@ func _build_menu() -> void:
 	vb.add_child(text_size_btn)
 	shadow_btn = _button("الظلال: %s" % ("تعمل" if shadows_on else "مطفأة"), _toggle_shadows, Vector2(0, 54), 22)
 	vb.add_child(shadow_btn)
+	sfx_btn = _button("الأصوات: %s" % ("تعمل" if sfx_on else "مطفأة"), _toggle_sfx, Vector2(0, 54), 22)
+	vb.add_child(sfx_btn)
 	new_btn = _button("مخيم جديد", _new_pressed, Vector2(0, 54), 22, Color("#6b4a2e"))
 	vb.add_child(new_btn)
 
@@ -2973,6 +3120,8 @@ func _rebuild_cards() -> void:
 	for bname in BUILDINGS:
 		var def: Dictionary = BUILDINGS[bname]
 		if str(def["tab"]) != build_tab:
+			continue
+		if bool(def.get("hidden", false)):
 			continue
 		cards_box.add_child(_build_card(str(bname), def))
 	_scroll_to_start.call_deferred(build_scroll)
@@ -3235,7 +3384,7 @@ func _goal_done(key: String) -> bool:
 	match key:
 		"workers": return workers_opened
 		"well": return _has_done("Well")
-		"tent": return _has_done("Tent")
+		"home": return _has_done("Shack") or _has_done("Small House") or _has_done("Stone House") or _has_done("Large House")
 		"road": return roads.size() >= 4
 		"storehouse": return _has_done("Storehouse")
 		"farm": return _has_done("Farm")
@@ -3276,6 +3425,37 @@ func _goal_done(key: String) -> bool:
 		"level5": return level >= 5
 		"day90": return day >= 90
 	return false
+
+
+# v2/v3.0 saves used an 88-unit grid with 2x1 medium plots.
+func _convert_old_anchor(gx: int, gz: int, cls: String) -> Vector2i:
+	var off := Vector2(0.0 if cls == "S" else 0.5, 0.5 if cls == "L" else 0.0)
+	var wx := camp_pos.x + (float(gx) + off.x) * OLD_PLACE_CELL
+	var wz := camp_pos.z + (float(gz) + off.y) * OLD_PLACE_CELL
+	return _anchor_from_world(wx, wz, cls)
+
+
+func _old_cell_to_new(cell: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var cx := float(cell.x) * OLD_PLACE_CELL
+	var cz := float(cell.y) * OLD_PLACE_CELL
+	var r := int(ceil(OLD_PLACE_CELL / PLACE_CELL))
+	var c0 := Vector2i(roundi(cx / PLACE_CELL), roundi(cz / PLACE_CELL))
+	for dx in range(-r, r + 1):
+		for dz in range(-r, r + 1):
+			var n := c0 + Vector2i(dx, dz)
+			if absf(float(n.x) * PLACE_CELL - cx) <= OLD_PLACE_CELL * 0.5 and absf(float(n.y) * PLACE_CELL - cz) <= OLD_PLACE_CELL * 0.5:
+				out.append(n)
+	return out
+
+
+func _nearest_free(gx: int, gz: int, cls: String, max_r: int) -> Vector2i:
+	for r in range(1, max_r + 1):
+		for dx in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if maxi(absi(dx), absi(dz)) == r and _cells_free(gx + dx, gz + dz, cls):
+					return Vector2i(gx + dx, gz + dz)
+	return Vector2i(99999, 99999)
 
 
 func _add_trail_patch(key: Vector2i) -> void:
@@ -3328,7 +3508,7 @@ func _write_save(path: String, silent: bool) -> void:
 		"zones": zl, "roads": rl, "trails": tl, "village_rel": vs, "contracts": contracts, "requests": requests,
 		"policies": policies.keys(), "raid_next_day": raid_next_day, "raids_won": raids_won, "raids_lost": raids_lost,
 		"lairs_cleared": lairs_cleared, "trades_done": trades_done, "contracts_signed": contracts_signed,
-		"day_timer": day_timer
+		"day_timer": day_timer, "camp_tents_up": camp_tents_up
 	}
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
@@ -3417,7 +3597,11 @@ func _load_game(path: String) -> void:
 	zones.clear()
 	for z in d.get("zones", []):
 		if typeof(z) == TYPE_ARRAY and z.size() >= 3 and ZONE_AR.has(int(z[2])):
-			zones[Vector2i(int(z[0]), int(z[1]))] = int(z[2])
+			if save_ver >= 8:
+				zones[Vector2i(int(z[0]), int(z[1]))] = int(z[2])
+			else:
+				for nc in _old_cell_to_new(Vector2i(int(z[0]), int(z[1]))):
+					zones[nc] = int(z[2])
 	roads.clear()
 	trail_counts.clear()
 	trail_used = 0
@@ -3457,6 +3641,9 @@ func _load_game(path: String) -> void:
 	lairs_cleared = clampi(int(d.get("lairs_cleared", 0)), 0, BANDIT_LAIRS.size())
 	trades_done = int(d.get("trades_done", 0))
 	contracts_signed = int(d.get("contracts_signed", contracts.size()))
+	camp_tents_up = bool(d.get("camp_tents_up", true))
+	if is_instance_valid(camp_tents_node):
+		camp_tents_node.visible = camp_tents_up
 	expedition_day = -1
 	expedition_lair = -1
 	caravan_until = -1
@@ -3479,8 +3666,16 @@ func _load_game(path: String) -> void:
 		var gx_b := int(ed.get("gx", 0))
 		var gz_b := int(ed.get("gz", 0))
 		var cls_b := str(BUILDINGS[t]["cls"])
+		if save_ver < 8:
+			var conv := _convert_old_anchor(gx_b, gz_b, cls_b)
+			gx_b = conv.x
+			gz_b = conv.y
 		if not _cells_free(gx_b, gz_b, cls_b):
-			continue
+			var spot := _nearest_free(gx_b, gz_b, cls_b, 3)
+			if spot.x == 99999:
+				continue
+			gx_b = spot.x
+			gz_b = spot.y
 		var lvl_b := int(ed.get("lvl", int(ed.get("upgrade", 0)) + 1))
 		var new_p := _create_dynamic_plot(gx_b, gz_b, cls_b)
 		var new_b := _spawn_building(t, new_p.idx, float(ed.get("progress", 1.0)), bool(ed.get("done", true)), float(ed.get("rot", -1.0)), lvl_b)
@@ -3614,6 +3809,7 @@ func _add_xp(amount: float) -> void:
 		if opened > 0:
 			msg += " و%d قطعة أرض جديدة." % opened
 		_toast(msg, 6.0)
+		_sfx("levelup", -3.0)
 		_refresh_plots()
 		if is_instance_valid(build_sheet) and build_sheet.visible:
 			_rebuild_cards()
@@ -3718,6 +3914,7 @@ func _cancel_placement() -> void:
 
 func _confirm_build() -> void:
 	if selected_building == "" or not pending_valid:
+		_sfx("error")
 		_toast("المس موقعًا صالحًا (أخضر) أولًا.")
 		return
 	var def: Dictionary = BUILDINGS[selected_building]
@@ -3739,6 +3936,8 @@ func _confirm_build() -> void:
 	var p := _create_dynamic_plot(pending_gx, pending_gz, cls)
 	var bname := selected_building
 	_spawn_building(bname, p.idx, 0.0, false)
+	_dust_burst(p.pos)
+	_sfx("build", -3.0)
 	_cancel_placement()
 	_assign_tasks()
 	_refresh_ui()
@@ -3785,18 +3984,20 @@ func _spawn_building(type: String, plot_idx: int, progress: float, done: bool, r
 	b.lvl = clampi(lvl, 1, MAX_BLD_LEVEL)
 	b.rot = rot if rot >= 0.0 else _facing_for(Vector2(p.pos.x, p.pos.z), p.cls)
 	b.zone_bonus = _zone_matches(p.gx, p.gz, p.cls, str(def.get("cat", "any")))
-	b.base_scale = float(def["scale"])
+	b.base_scale = float(def["scale"]) * float(CLASS_FILL[p.cls])
 	b.node = Node3D.new()
 	b.node.position = b.pos
 	b.node.rotation_degrees.y = b.rot
 	building_root.add_child(b.node)
 	b.model = _make_building_model(type)
+	_bake_static(b.model)
 	b.model.position.y = 2.0
 	b.node.add_child(b.model)
 	p.building = b
 	if not done:
 		b.model.scale = Vector3(b.base_scale, b.base_scale * lerpf(0.12, 1.0, progress), b.base_scale)
 		b.scaffold = _make_scaffold(p.size.x, p.size.y)
+		_bake_static(b.scaffold)
 		b.node.add_child(b.scaffold)
 		b.label = Label3D.new()
 		b.label.font = ui_font_bold
@@ -3811,6 +4012,7 @@ func _spawn_building(type: String, plot_idx: int, progress: float, done: bool, r
 	else:
 		_apply_level_visual(b)
 	buildings.append(b)
+	_add_building_fx(b)
 	if done:
 		_add_building_source(b)
 	_refresh_plots()
@@ -3839,6 +4041,7 @@ func _apply_level_visual(b: Building) -> void:
 	_cyl(d, 0.9, 0.9, 40.0, Vector3(hx, 22, -hz), Color("#8a6a40"))
 	_box(d, Vector3(12, 7, 1.0), Vector3(hx - 6.5, 37, -hz), C_GOLD)
 	if b.lvl < 3:
+		_bake_static(d)
 		return
 	for side in [-1.0, 1.0]:
 		_box(d, Vector3(p.size.x, 5, 2.5), Vector3(0, 4.5, side * (p.size.y * 0.5 - 1.5)), Color("#efe4c8"), true)
@@ -3852,6 +4055,7 @@ func _apply_level_visual(b: Building) -> void:
 		_cyl(d, 0.7, 0.7, 16.0, Vector3(sx2 * p.size.x, 10, hz + 4.0), Color("#3a3530"))
 		var l := _sphere(d, 2.6, Vector3(sx2 * p.size.x, 19, hz + 4.0), Color.WHITE)
 		l.material_override = lamp
+	_bake_static(d)
 
 
 func _apply_source_stats(s: Source, b: Building) -> void:
@@ -3896,6 +4100,9 @@ func _complete_building(b: Building) -> void:
 	var tw := create_tween()
 	tw.tween_property(b.model, "scale", target_scale, 0.35).from(target_scale * 1.12)
 	_add_building_source(b)
+	_add_building_fx(b)
+	_dust_burst(b.pos)
+	_sfx("complete", -4.0)
 	_add_xp(float(def["xp"]))
 	if def.get("council", false) and not council_unlocked:
 		council_unlocked = true
@@ -4045,6 +4252,8 @@ func _upgrade_pressed() -> void:
 		if s.building == b:
 			_apply_source_stats(s, b)
 	_toast("رُقّي «%s» إلى المستوى %d!" % [str(BUILDINGS[b.type]["ar"]), b.lvl], 4.0)
+	_sfx("upgrade")
+	_dust_burst(b.pos)
 	_log_event("⬆ يوم %d: ترقية %s إلى م%d." % [day, str(BUILDINGS[b.type]["ar"]), b.lvl])
 	_add_xp(15.0 + 10.0 * float(b.lvl))
 	_update_land_value()
@@ -4297,8 +4506,8 @@ func _pay_daily_costs() -> Dictionary:
 
 # Share of people living in the camp's patched tents or in tents rather than real houses.
 func _tent_share() -> float:
-	var tent_cap := float(BASE_HOUSING)
-	var total := float(BASE_HOUSING)
+	var tent_cap := float(BASE_HOUSING) if camp_tents_up else 0.0
+	var total := tent_cap
 	for b in buildings:
 		var h := float(_housing_of(b))
 		total += h
@@ -4399,6 +4608,7 @@ func _advance_day() -> void:
 	elif (cur_season == 0 or cur_season == 2 or cur_season == 3) and day % 8 == 0 and rng.randf() < 0.4:
 		var rain := 12.0 + rng.randf() * 10.0
 		resources["Water"] = float(resources["Water"]) + rain
+		_start_rain(DAY_LENGTH * 0.7)
 		_toast("أمطار — امتلأت الجرار (+%d ماء) 💧" % int(rain), 4.0)
 		_log_event("🌧 يوم %d: أمطار (+%d ماء)." % [day, int(rain)])
 
@@ -4551,6 +4761,7 @@ func _advance_day() -> void:
 		elif _housing_capacity() <= survivors.size():
 			_toast("ناجون يطلبون اللجوء، لكن لا مأوى. ابنِ بيتًا.", 4.0)
 	peak_pop = maxi(peak_pop, survivors.size())
+	_check_camp_tents()
 	budget_lines.clear()
 	for k in dinar_today:
 		budget_lines.append([k, float(dinar_today[k])])
@@ -4565,6 +4776,19 @@ func _advance_day() -> void:
 		_refresh_army_sheet()
 	if is_instance_valid(villages_sheet) and villages_sheet.visible:
 		_refresh_villages_sheet()
+
+
+func _check_camp_tents() -> void:
+	if not camp_tents_up:
+		return
+	var houses := _housing_capacity() - BASE_HOUSING
+	if houses >= survivors.size() + 2:
+		camp_tents_up = false
+		if is_instance_valid(camp_tents_node):
+			camp_tents_node.visible = false
+		morale = minf(100.0, morale + 5.0)
+		_toast("انتقلت العائلات من الخيام إلى بيوت حقيقية — طُويت خيام المخيم. المعنويات +5", 6.0)
+		_log_event("🏠 يوم %d: طُويت خيام المخيم." % day)
 
 
 func _new_name() -> String:
@@ -4639,6 +4863,7 @@ func _apply_moral_effect(eff: String) -> void:
 func _check_goals() -> void:
 	while goal_index < GOALS.size() and _goal_done(str(GOALS[goal_index]["key"])):
 		_toast("أُنجز الهدف: %s" % str(GOALS[goal_index]["text"]), 4.0)
+		_sfx("goal", -6.0)
 		_add_xp(15.0)
 		goal_index += 1
 	if is_instance_valid(goal_label):
@@ -4787,48 +5012,50 @@ func _build_sea() -> void:
 	var sea := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(4000.0, 9000.0)
+	plane.subdivide_width = 60
+	plane.subdivide_depth = 120
 	sea.mesh = plane
 	sea.position = Vector3(-3000.0, -1.0, 0.0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = SEA_COLOR
-	mat.roughness = 0.32
-	mat.metallic = 0.05
-	sea.material_override = mat
+	var sm := ShaderMaterial.new()
+	sm.shader = load("res://shaders/sea.gdshader")
+	sea.material_override = sm
+	sea.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	terrain_root.add_child(sea)
 
 func _make_source_visual(res: String) -> Node3D:
 	var n := Node3D.new()
 	match res:
 		"Wood":
-			for p in [Vector3(-14, 0, 6), Vector3(10, 0, -8), Vector3(16, 0, 14)]:
-				_cyl(n, 2.4, 3.0, 20.0, p + Vector3(0, 10, 0), Color("#6b4f33"))
-				_cyl(n, 0.0, 15.0, 34.0, p + Vector3(0, 36, 0), Color("#4f6b3a"))
+			_prop(n, "nature/tree_cone", 58.0, Vector3(-14, 0, 6), 10.0, PINE_TINT)
+			_prop(n, "nature/tree_fat", 42.0, Vector3(12, 0, -10), 80.0, OLIVE_TINT)
+			_prop(n, "nature/tree_cone", 48.0, Vector3(18, 0, 16), 200.0, PINE_TINT)
+			_prop(n, "nature/log", 6.0, Vector3(-4, 0, 24), 40.0)
 		"Stone":
-			var rocks := [
-				[Vector3(-10, 9, 0), Vector3(26, 18, 22), 20.0],
-				[Vector3(14, 7, 8), Vector3(20, 14, 18), -25.0],
-				[Vector3(6, 6, -14), Vector3(16, 12, 14), 40.0]
-			]
-			for rk in rocks:
-				var rock := _box(n, rk[1], rk[0], Color("#ffffff"), true)
-				rock.rotation_degrees.y = rk[2]
+			_prop(n, "nature/rock_largeA", 16.0, Vector3(-10, 0, 0), 20.0)
+			_prop(n, "nature/rock_tallA", 26.0, Vector3(14, 0, 6), -25.0)
+			_prop(n, "nature/rock_largeC", 12.0, Vector3(4, 0, -16), 70.0)
 		"Water":
 			_cyl(n, 20.0, 21.0, 5.0, Vector3(0, 2.5, 0), Color("#ffffff"), true)
 			_cyl(n, 15.0, 15.0, 1.5, Vector3(0, 4.9, 0), Color("#4aa3d9"))
+			_prop(n, "nature/stone_smallA", 6.0, Vector3(-20, 0, -8))
+			_prop(n, "nature/stone_smallB", 5.0, Vector3(18, 0, 12))
 			for p in [Vector3(-18, 0, 12), Vector3(-12, 0, 18), Vector3(20, 0, -10)]:
-				_box(n, Vector3(2, 18, 2), p + Vector3(0, 9, 0), Color("#6f8f3d"))
+				_prop(n, "nature/grass_large", 14.0, p, p.x * 5.0)
 		"Food":
 			for p in [Vector3(-14, 0, 4), Vector3(8, 0, -10), Vector3(14, 0, 12)]:
-				_sphere(n, 9.0, p + Vector3(0, 7, 0), Color("#8a9a45"))
-				_sphere(n, 2.4, p + Vector3(5, 12, 4), Color("#d9a441"))
-				_sphere(n, 2.4, p + Vector3(-4, 10, 6), Color("#d9a441"))
+				_prop(n, "nature/plant_bushDetailed", 16.0, p, p.z * 9.0)
+				_sphere(n, 2.4, p + Vector3(5, 12, 4), Color("#7a3f5a"))
+				_sphere(n, 2.4, p + Vector3(-4, 10, 6), Color("#7a3f5a"))
+			_prop(n, "nature/crop_melon", 7.0, Vector3(0, 0, 18))
 		"Scrap":
-			_box(n, Vector3(34, 16, 8), Vector3(-6, 8, -8), Color("#ffffff"), true)
-			_box(n, Vector3(10, 26, 8), Vector3(14, 13, -8), Color("#ffffff"), true)
-			_box(n, Vector3(8, 5, 8), Vector3(-14, 2.5, 8), Color("#ffffff"), true)
-			var sheet := _box(n, Vector3(20, 3, 14), Vector3(2, 5, 10), Color("#8a5a3a"))
+			_prop(n, "survival/metal-panel", 22.0, Vector3(-6, 0, -8), 15.0)
+			_prop(n, "survival/metal-panel-screws", 18.0, Vector3(12, 0, -4), -40.0)
+			_prop(n, "survival/barrel", 13.0, Vector3(-16, 0, 10))
+			_prop(n, "survival/box-open", 9.0, Vector3(8, 0, 12), 30.0)
+			var sheet := _box(n, Vector3(20, 3, 14), Vector3(2, 2, 18), Color("#8a5a3a"))
 			sheet.rotation_degrees = Vector3(8, 25, 4)
 	return n
+
 
 func _update_source_visual(s: Source) -> void:
 	if s.node == null or s.infinite:
@@ -4896,6 +5123,8 @@ func _stone_mat(tint: Color = Color.WHITE) -> StandardMaterial3D:
 	return m
 
 func _pick_mat(color: Color, stone: bool) -> StandardMaterial3D:
+	if not stone and color == WINDOW_COLOR:
+		return _window_mat()
 	return _stone_mat(color) if stone else _mat(color)
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, stone: bool = false) -> MeshInstance3D:
@@ -4914,6 +5143,8 @@ func _cyl(parent: Node3D, top_r: float, bottom_r: float, h: float, pos: Vector3,
 	mesh.top_radius = top_r
 	mesh.bottom_radius = bottom_r
 	mesh.height = h
+	mesh.radial_segments = 12
+	mesh.rings = 1
 	mi.mesh = mesh
 	mi.position = pos
 	mi.material_override = _pick_mat(color, stone)
@@ -4925,6 +5156,8 @@ func _sphere(parent: Node3D, r: float, pos: Vector3, color: Color, stone: bool =
 	var mesh := SphereMesh.new()
 	mesh.radius = r
 	mesh.height = r * 2.0
+	mesh.radial_segments = 14
+	mesh.rings = 7
 	mi.mesh = mesh
 	mi.position = pos
 	mi.material_override = _pick_mat(color, stone)
@@ -4937,6 +5170,8 @@ func _dome(parent: Node3D, r: float, pos: Vector3, color: Color = Color("#fff6e0
 	mesh.radius = r
 	mesh.height = r
 	mesh.is_hemisphere = true
+	mesh.radial_segments = 20
+	mesh.rings = 6
 	mi.mesh = mesh
 	mi.position = pos
 	mi.material_override = _stone_mat(color)
@@ -5028,20 +5263,97 @@ func _add_villager(vname: String, skill: String) -> Villager:
 	survivors.append(v)
 	return v
 
+const FEMALE_NAMES := ["مريم", "ليلى", "سلمى", "نور", "رنا", "أمل", "هدى", "دينا", "لين", "حنان", "ريم", "سارة", "إيناس", "لينا", "فرح"]
+const CHAR_HEIGHT := 34.0
+
+
+func _character_path(vname: String) -> String:
+	var g := "female" if FEMALE_NAMES.has(vname.split(" ")[0]) else "male"
+	var letters := ["a", "b", "c", "d", "e", "f"]
+	var h := absi(vname.hash()) % letters.size()
+	return "characters/character-%s-%s" % [g, letters[h]]
+
+
 func _make_villager_node(v: Villager, skill: String) -> Node3D:
 	var root := Node3D.new()
-	var body := MeshInstance3D.new()
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 6.5
-	capsule.height = 26.0
-	body.mesh = capsule
-	body.position.y = 13.0
-	body.material_override = _mat(SKILL_COLORS[skill])
+	var body := _asset(_character_path(v.vname), CHAR_HEIGHT)
+	body.name = "Body"
 	root.add_child(body)
-	_sphere(root, 5.5, Vector3(0, 31, 0), Color("#e0b88a"))
-	v.carry_node = _box(root, Vector3(10, 10, 10), Vector3(0, 46, 0), Color("#ffffff"))
+	v.anim = _find_anim(body)
+	var disc := _cyl(root, 7.5, 7.5, 0.8, Vector3(0, 0.6, 0), SKILL_COLORS[skill])
+	disc.name = "Disc"
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	v.carry_node = _box(root, Vector3(10, 10, 10), Vector3(0, CHAR_HEIGHT + 9.0, 0), Color("#ffffff"))
 	v.carry_node.visible = false
+	_play(v, "idle")
 	return root
+
+
+func _find_anim(n: Node) -> AnimationPlayer:
+	var aps := n.find_children("*", "AnimationPlayer", true, false)
+	return aps[0] if not aps.is_empty() else null
+
+
+func _play(v: Villager, anim_name: String) -> void:
+	if v.anim == null or v.cur_anim == anim_name:
+		return
+	if not v.anim.has_animation(anim_name):
+		return
+	v.cur_anim = anim_name
+	var a := v.anim.get_animation(anim_name)
+	if a != null:
+		a.loop_mode = Animation.LOOP_LINEAR
+	v.anim.play(anim_name, 0.2)
+
+
+func _refresh_villager_look(v: Villager) -> void:
+	var disc: MeshInstance3D = v.node.get_node_or_null("Disc")
+	var old := v.node.get_node_or_null("Gear")
+	if old != null:
+		old.free()
+	if v.unit == "":
+		if disc != null:
+			disc.material_override = _mat(SKILL_COLORS[v.skill])
+		return
+	if disc != null:
+		disc.material_override = _mat(UNITS[v.unit]["color"])
+	var gear := Node3D.new()
+	gear.name = "Gear"
+	v.node.add_child(gear)
+	_cyl(gear, 0.8, 0.8, 46.0, Vector3(9, 23, 2), Color("#6b4f33"))
+	_cyl(gear, 0.0, 2.2, 6.0, Vector3(9, 49, 2), Color("#b0b6bb"))
+	var helm := _sphere(gear, 7.0, Vector3(0, CHAR_HEIGHT - 4.0, 0), Color("#6f747a"))
+	helm.scale = Vector3(1.0, 0.55, 1.0)
+	if v.unit == "archer":
+		var bow := _cyl(gear, 1.0, 1.0, 26.0, Vector3(-9, 18, 0), Color("#5a3e22"))
+		bow.rotation_degrees.z = 12.0
+	if v.unit == "rider":
+		var horse := MeshInstance3D.new()
+		var cap := CapsuleMesh.new()
+		cap.radius = 8.0
+		cap.height = 34.0
+		horse.mesh = cap
+		horse.rotation_degrees.x = 90.0
+		horse.position = Vector3(0, 9, 0)
+		horse.material_override = _mat(Color("#6b4a32"))
+		gear.add_child(horse)
+
+
+func _raider_figure() -> Node3D:
+	var r := _asset("characters/character-male-%s" % ["a", "c", "e"][rng.randi() % 3], CHAR_HEIGHT)
+	for c in r.find_children("*", "MeshInstance3D", true, false):
+		(c as MeshInstance3D).material_override = _mat(Color("#2b2522"))
+	var ap := _find_anim(r)
+	if ap != null and ap.has_animation("walk"):
+		ap.get_animation("walk").loop_mode = Animation.LOOP_LINEAR
+		ap.play("walk")
+	var wrap := Node3D.new()
+	wrap.add_child(r)
+	_cyl(wrap, 0.8, 0.8, 30.0, Vector3(8, 18, 0), Color("#4a3b2e"))
+	var scarf := _sphere(wrap, 6.6, Vector3(0, CHAR_HEIGHT - 6.0, 0), Color("#7a1f1f"))
+	scarf.scale = Vector3(1.0, 0.7, 1.0)
+	return wrap
+
 
 func _random_point_around(center: Vector3, rmin: float, rmax: float) -> Vector3:
 	var a := rng.randf() * TAU
@@ -5224,13 +5536,19 @@ func _move(v: Villager, dt: float, bob: bool = false) -> bool:
 		var step := minf(dist, WALK_SPEED * dt * _speed_at(flat))
 		flat += (g - flat).normalized() * step
 		v.phase += dt * 12.0
-		hop = absf(sin(v.phase)) * 5.0
+		hop = 0.0 if v.anim != null else absf(sin(v.phase)) * 5.0
 		v.node.rotation.y = atan2(g.x - flat.x, g.z - flat.z)
+		_play(v, "walk")
 		_note_step(flat, dt)
 		arrived = flat.distance_to(g) <= 3.0
 	elif bob:
 		v.phase += dt * 14.0
-		hop = absf(sin(v.phase)) * 6.0
+		if v.anim != null:
+			_play(v, "interact-right" if v.task == "gather" else "interact-left")
+		else:
+			hop = absf(sin(v.phase)) * 6.0
+	else:
+		_play(v, "idle")
 	v.node.position = Vector3(flat.x, _height_at_world(flat.x, flat.z) + hop, flat.z)
 	return arrived
 
@@ -5325,7 +5643,7 @@ func _missing_resource(cost: Dictionary) -> String:
 	return ""
 
 func _housing_capacity() -> int:
-	var capacity := BASE_HOUSING
+	var capacity := BASE_HOUSING if camp_tents_up else 0
 	for b in buildings:
 		if b.done:
 			var def: Dictionary = BUILDINGS[b.type]
@@ -5369,11 +5687,17 @@ func _process(delta: float) -> void:
 	# Day/night ambient light follows day progress
 	if is_instance_valid(world_env) and not paused:
 		var t := day_timer / DAY_LENGTH
-		var day_energy := 0.92 + 0.16 * sin(t * PI)
+		var daylight := smoothstep(0.0, 0.35, sin(t * PI))
+		if rain_time > 0.0:
+			daylight *= 0.75
+		var day_energy := lerpf(0.22, 1.05, daylight)
 		if is_instance_valid(sun_node):
 			sun_node.light_energy = day_energy
+			sun_node.light_color = Color("#9fb0d8").lerp(Color("#fff1dc"), daylight)
+		_update_fx(delta * game_speed, t)
 		var season_sky: Color = SEASON_SKY[cur_season]
-		var amb: Color = season_sky.darkened(0.12).lerp(Color("#4a5a7a"), (1.0 - sin(t * PI)) * 0.45)
+		var amb: Color = Color("#2c3550").lerp(season_sky.darkened(0.12), daylight)
+		world_env.background_color = Color("#1d2438").lerp(Color("#9cc3d5"), daylight)
 		world_env.ambient_light_color = amb
 	# Crisis overlay pulse
 	if is_instance_valid(crisis_overlay) and crisis_overlay.visible:
@@ -5662,6 +5986,7 @@ func _do_trade(idx: int, kind: String, i: int) -> void:
 		trades_done += 1
 		_log_event("💰 يوم %d: بعت %d %s لـ%s بـ%d دينار." % [day, qty, RES_AR[res], v["ar"], gain])
 	used[key] = int(used.get(key, 0)) + 1
+	_sfx("coins")
 	_check_goals()
 	_refresh_ui()
 	_open_trade(idx)
@@ -5832,6 +6157,7 @@ func _caravan_trade(i: int) -> void:
 		_add_dinar(-float(d["dinar"]), "القافلة")
 		resources[res] = float(resources[res]) + float(d["qty"])
 	d["left"] = int(d["left"]) - 1
+	_sfx("coins")
 	_check_goals()
 	_refresh_ui()
 	_refresh_villages_sheet()
@@ -6210,6 +6536,7 @@ func _recruit(unit: String) -> void:
 	_clamp_jobs()
 	_assign_tasks()
 	_toast("انضم %s إلى الجيش كـ%s." % [pick.vname, u["ar"]], 3.5)
+	_sfx("recruit")
 	_check_goals()
 	_refresh_ui()
 	_refresh_army_sheet()
@@ -6234,31 +6561,7 @@ func _patrol_point() -> Vector3:
 	return _random_point_around(camp_pos, r * 0.9, r)
 
 
-func _refresh_villager_look(v: Villager) -> void:
-	var body: MeshInstance3D = v.node.get_child(0)
-	var old := v.node.get_node_or_null("Gear")
-	if old != null:
-		old.free()
-	if v.unit == "":
-		body.material_override = _mat(SKILL_COLORS[v.skill])
-		return
-	body.material_override = _mat(UNITS[v.unit]["color"])
-	var gear := Node3D.new()
-	gear.name = "Gear"
-	v.node.add_child(gear)
-	_cyl(gear, 0.8, 0.8, 44.0, Vector3(8, 22, 0), Color("#6b4f33"))
-	_cyl(gear, 0.0, 2.0, 6.0, Vector3(8, 47, 0), Color("#b0b6bb"))
-	_sphere(gear, 6.2, Vector3(0, 34, 0), Color("#7a7f84"))
-	if v.unit == "rider":
-		var horse := MeshInstance3D.new()
-		var cap := CapsuleMesh.new()
-		cap.radius = 8.0
-		cap.height = 34.0
-		horse.mesh = cap
-		horse.rotation_degrees.x = 90.0
-		horse.position = Vector3(0, 9, 0)
-		horse.material_override = _mat(Color("#6b4a32"))
-		gear.add_child(horse)
+
 
 
 func _army_day(has_watchtower: bool) -> void:
@@ -6320,20 +6623,12 @@ func _start_raid() -> void:
 	add_child(raid_node)
 	var count := clampi(int(raid_strength / 10.0) + 2, 3, 12)
 	for i in range(count):
-		var r := Node3D.new()
+		var r := _raider_figure()
 		r.position = Vector3(float(i % 4) * 22.0, 0.0, float(i / 4) * 22.0 - 22.0)
+		r.rotation_degrees.y = -90.0
 		raid_node.add_child(r)
-		var body := MeshInstance3D.new()
-		var cap := CapsuleMesh.new()
-		cap.radius = 6.5
-		cap.height = 26.0
-		body.mesh = cap
-		body.position.y = 13.0
-		body.material_override = _mat(Color("#2b2522"))
-		r.add_child(body)
-		_sphere(r, 5.5, Vector3(0, 31, 0), Color("#3a2f28"))
-		_cyl(r, 0.8, 0.8, 30.0, Vector3(7, 20, 0), Color("#4a3b2e"))
 	raid_timer = 0.0
+	_sfx("raid", -2.0)
 	_toast("⚔ غارة! عصابة من %d رجال تهاجم من الشرق (قوة %d مقابل دفاعك %d)." % [count, int(raid_strength), int(_defense_total())], 6.0)
 	_log_event("⚔ يوم %d: غارة بقوة %d." % [day, int(raid_strength)])
 	for v in survivors:
@@ -6352,13 +6647,12 @@ func _update_raid(dt: float) -> void:
 	if flat.distance_to(target) > step:
 		flat += (target - flat).normalized() * step
 		raid_node.position = Vector3(flat.x, _height_at_world(flat.x, flat.z), flat.z)
-		for c in raid_node.get_children():
-			(c as Node3D).position.y = absf(sin(raid_timer * 10.0 + c.position.x)) * 4.0
 		return
 	_resolve_raid()
 
 
 func _resolve_raid() -> void:
+	_sfx("clash", -2.0)
 	var def := _defense_total()
 	var s := raid_strength
 	var report: Array[String] = []
@@ -6974,10 +7268,24 @@ func _build_plan_sheet() -> void:
 	var lvb := _button("قيمة الأرض", _toggle_lv_overlay, Vector2(160, 52), 17)
 	row3.add_child(lvb)
 	plan_buttons["lv"] = lvb
-	var help := _label("المناطق تمنع خلط البيوت بالمصانع والحظائر، والمبنى في منطقته يحصل +20%.", 15, C_MUTED)
+	var help := _label("اختر أداة ثم اسحب على الأرض. المناطق تمنع خلط البيوت بالمصانع، والمبنى في منطقته يحصل +20%.", 15, C_MUTED)
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	help.custom_minimum_size = Vector2(420, 0)
 	row3.add_child(help)
+	plan_bar = _sheet(Control.PRESET_CENTER_BOTTOM)
+	plan_bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	plan_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	plan_bar.offset_bottom = -12
+	var pb := HBoxContainer.new()
+	pb.add_theme_constant_override("separation", 12)
+	plan_bar.add_child(pb)
+	plan_bar_label = _label_b("", 18, C_CREAM)
+	plan_bar_label.custom_minimum_size = Vector2(430, 0)
+	plan_bar_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	plan_bar_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	pb.add_child(plan_bar_label)
+	pb.add_child(_button("تغيير الأداة", _plan_change_tool, Vector2(160, 62), 18))
+	pb.add_child(_button("تم", _plan_done, Vector2(110, 62), 20, C_GREEN))
 
 
 func _refresh_plan_buttons() -> void:
@@ -7047,7 +7355,7 @@ func _inspect_open_sheet(which: String) -> void:
 
 
 func _hide_sheets() -> void:
-	for s in [build_sheet, workers_sheet, missions_sheet, log_sheet, villages_sheet, army_sheet, economy_sheet, plan_sheet]:
+	for s in [build_sheet, workers_sheet, missions_sheet, log_sheet, villages_sheet, army_sheet, economy_sheet, plan_sheet, plan_bar]:
 		if is_instance_valid(s):
 			(s as Control).visible = false
 
@@ -7066,6 +7374,7 @@ func _toggle_sheet(which: String) -> void:
 	target.visible = show
 	if show:
 		_fit_sheet(target)
+		_sfx("open", -12.0)
 	match which:
 		"workers":
 			if show:
@@ -7171,3 +7480,518 @@ func _input(event: InputEvent) -> void:
 		"up":
 			scroll_pressing = false
 			scroll_active = null
+
+
+# ---------------------------------------------------------------- 3D assets (Kenney, CC0) and world dressing
+
+const KN := "res://assets/kenney/"
+# Nature Kit ships teal/orange colours; re-tint to a Mediterranean palette by material name.
+const MED_TINT := {
+	"leafsGreen": Color("#6f7d48"), "woodBark": Color("#6e5a44"), "grass": Color("#8f9b58"),
+	"dirt": Color("#c2ad84"), "stone": Color("#ddd2b8"), "stoneDark": Color("#bfb397"),
+	"wood": Color("#8c6c47"), "woodInner": Color("#d8c094"), "leafsFall": Color("#a87a3c"),
+	"_defaultMat": Color("#cdb98c"), "colorRed": Color("#c8323a"),
+}
+const OLIVE_TINT := {"leafsGreen": Color("#8a9670"), "woodBark": Color("#7a6650")}
+const PINE_TINT := {"leafsGreen": Color("#4c6236"), "woodBark": Color("#6a5440")}
+const CACTUS_TINT := {"leafsGreen": Color("#6f9150")}
+const ANEMONE_TINT := {"grass": Color("#7f9150"), "colorRed": Color("#d0242e")}
+const TENT_TINT := {"colorRed": Color("#e2d6b6"), "colorRedDark": Color("#c4b48c"), "wood": Color("#7a5c3c")}
+
+var asset_cache := {}
+var asset_mesh_cache := {}
+var scatter_items: Array = []     # [MultiMesh, index, Vector2 xz, Transform3D]
+
+
+func _asset_scene(path: String) -> PackedScene:
+	if asset_cache.has(path):
+		return asset_cache[path]
+	var full := KN + path + ".glb"
+	var ps: PackedScene = load(full) if ResourceLoader.exists(full) else null
+	asset_cache[path] = ps
+	return ps
+
+
+func _tint_node(n: Node, tint: Dictionary) -> void:
+	for c in n.find_children("*", "MeshInstance3D", true, false):
+		var mi: MeshInstance3D = c
+		for i in range(mi.mesh.get_surface_count()):
+			var m: Material = mi.mesh.surface_get_material(i)
+			var key := m.resource_name if m != null else ""
+			if tint.has(key):
+				mi.set_surface_override_material(i, _mat(tint[key]))
+			elif MED_TINT.has(key):
+				mi.set_surface_override_material(i, _mat(MED_TINT[key]))
+
+
+func _node_height(n: Node) -> float:
+	var top := 0.0
+	for c in n.find_children("*", "MeshInstance3D", true, false):
+		var mi: MeshInstance3D = c
+		var a := mi.mesh.get_aabb()
+		top = maxf(top, a.position.y + a.size.y)
+	return maxf(top, 0.001)
+
+
+# Instance a model scaled to a target height (in the parent's units), recoloured.
+func _asset(path: String, height: float, tint: Dictionary = {}) -> Node3D:
+	var ps := _asset_scene(path)
+	if ps == null:
+		return Node3D.new()
+	var n: Node3D = ps.instantiate()
+	_tint_node(n, tint)
+	n.scale = Vector3.ONE * (height / _node_height(n))
+	return n
+
+
+func _prop(parent: Node3D, path: String, height: float, pos: Vector3, rot_y: float = 0.0, tint: Dictionary = {}) -> Node3D:
+	var n := _asset(path, height, tint)
+	n.position = pos
+	n.rotation_degrees.y = rot_y
+	parent.add_child(n)
+	return n
+
+
+# Stone-textured version of a model (castle pieces become Jerusalem limestone).
+func _stone_asset(path: String, height: float) -> Node3D:
+	var n := _asset(path, height)
+	for c in n.find_children("*", "MeshInstance3D", true, false):
+		var mi: MeshInstance3D = c
+		for i in range(mi.mesh.get_surface_count()):
+			mi.set_surface_override_material(i, _stone_mat(Color.WHITE))
+	return n
+
+
+# Single recoloured mesh for MultiMesh scattering.
+func _asset_mesh(path: String, tint: Dictionary) -> Mesh:
+	var key := path + str(tint.keys())
+	if asset_mesh_cache.has(key):
+		return asset_mesh_cache[key]
+	var ps := _asset_scene(path)
+	if ps == null:
+		return null
+	var n: Node = ps.instantiate()
+	var mis := n.find_children("*", "MeshInstance3D", true, false)
+	var out: Mesh = null
+	if not mis.is_empty():
+		var src: Mesh = (mis[0] as MeshInstance3D).mesh
+		out = src.duplicate()
+		for i in range(out.get_surface_count()):
+			var m: Material = out.surface_get_material(i)
+			var nm := m.resource_name if m != null else ""
+			if tint.has(nm):
+				out.surface_set_material(i, _mat(tint[nm]))
+			elif MED_TINT.has(nm):
+				out.surface_set_material(i, _mat(MED_TINT[nm]))
+	n.free()
+	asset_mesh_cache[key] = out
+	return out
+
+
+# points: Array of [Vector3 pos, float height, float yaw]; one draw call per model type.
+func _scatter(path: String, tint: Dictionary, points: Array, hideable: bool, shadows: bool = true) -> void:
+	if points.is_empty():
+		return
+	var mesh := _asset_mesh(path, tint)
+	if mesh == null:
+		return
+	var base_h := maxf(0.001, mesh.get_aabb().position.y + mesh.get_aabb().size.y)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = points.size()
+	for i in range(points.size()):
+		var p: Vector3 = points[i][0]
+		var s := float(points[i][1]) / base_h
+		var xf := Transform3D(Basis(Vector3.UP, float(points[i][2])).scaled(Vector3.ONE * s), p)
+		mm.set_instance_transform(i, xf)
+		if hideable:
+			scatter_items.append([mm, i, Vector2(p.x, p.z)])
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	if not shadows:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	terrain_root.add_child(mi)
+
+
+func _hide_scatter_near(center: Vector2, size: Vector2) -> void:
+	for it in scatter_items:
+		var p: Vector2 = it[2]
+		if absf(p.x - center.x) < size.x * 0.5 + 14.0 and absf(p.y - center.y) < size.y * 0.5 + 14.0:
+			var mm: MultiMesh = it[0]
+			mm.set_instance_transform(int(it[1]), Transform3D(Basis().scaled(Vector3.ONE * 0.0001), Vector3(p.x, -500.0, p.y)))
+
+
+func _add_vegetation() -> void:
+	var wr := RandomNumberGenerator.new()
+	wr.seed = WORLD_SEED + 1
+	var olives: Dictionary = {"nature/tree_default": [], "nature/tree_oak": [], "nature/tree_fat": []}
+	var pines: Array = []
+	var palms: Dictionary = {"nature/tree_palmTall": [], "nature/tree_palmBend": []}
+	var cacti: Dictionary = {"nature/cactus_short": [], "nature/cactus_tall": []}
+	var cover: Dictionary = {"nature/grass_large": [], "nature/grass": [], "nature/flower_redA": [], "nature/flower_yellowA": [],
+		"nature/plant_bush": [], "nature/stone_smallA": [], "nature/stone_smallB": []}
+	var groves := 0
+	var tries := 0
+	while groves < 14 and tries < 600:
+		tries += 1
+		var gx := wr.randi_range(7, GRID - 6)
+		var gz := wr.randi_range(2, GRID - 3)
+		if not _is_land(gx, gz) or Vector2(Vector2i(gx, gz) - CAMP_CELL).length() < PLATEAU_R1 + 1.5:
+			continue
+		var v := _grid_vertex(gx, gz)
+		if v.y > 330.0:
+			continue
+		groves += 1
+		var keys := olives.keys()
+		for k in range(wr.randi_range(6, 11)):
+			var px := v.x + wr.randf_range(-95.0, 95.0)
+			var pz := v.z + wr.randf_range(-95.0, 95.0)
+			(olives[keys[wr.randi() % keys.size()]] as Array).append([Vector3(px, _height_at_world(px, pz), pz), wr.randf_range(30.0, 44.0), wr.randf() * TAU])
+	for i in range(70):
+		var px2 := wr.randf_range(-1700.0, 1700.0)
+		var pz2 := wr.randf_range(-1700.0, 1700.0)
+		var h2 := _height_at_world(px2, pz2)
+		if not _is_land_world(px2, pz2) or h2 < 60.0 or Vector2(px2 - camp_pos.x, pz2 - camp_pos.z).length() < 600.0:
+			continue
+		pines.append([Vector3(px2, h2, pz2), wr.randf_range(46.0, 70.0), wr.randf() * TAU])
+	for gz2 in range(2, GRID - 2):
+		if wr.randf() < 0.55:
+			var cx := _coastline_x(float(gz2)) + wr.randf_range(1.2, 2.6)
+			var wx := (cx - GRID / 2.0 + 0.5) * TILE_SIZE
+			var wz := (float(gz2) - GRID / 2.0 + 0.5) * TILE_SIZE + wr.randf_range(-30.0, 30.0)
+			var pk: Array = palms.keys()
+			(palms[pk[wr.randi() % 2]] as Array).append([Vector3(wx, _height_at_world(wx, wz), wz), wr.randf_range(48.0, 66.0), wr.randf() * TAU])
+	for r in ruin_nodes:
+		var rp: Vector3 = (r as Node3D).position
+		for k2 in range(wr.randi_range(1, 3)):
+			var ox := rp.x + wr.randf_range(-45.0, 45.0)
+			var oz := rp.z + wr.randf_range(-45.0, 45.0)
+			var ck: Array = cacti.keys()
+			(cacti[ck[wr.randi() % 2]] as Array).append([Vector3(ox, _height_at_world(ox, oz), oz), wr.randf_range(14.0, 24.0), wr.randf() * TAU])
+	var ckeys := cover.keys()
+	for i2 in range(900):
+		var px3 := camp_pos.x + wr.randf_range(-1500.0, 1500.0)
+		var pz3 := camp_pos.z + wr.randf_range(-1500.0, 1500.0)
+		if not _is_land_world(px3, pz3):
+			continue
+		var d := Vector2(px3 - camp_pos.x, pz3 - camp_pos.z).length()
+		if d < 90.0 or (d < 380.0 and wr.randf() < 0.55):
+			continue
+		var kind: String = ckeys[wr.randi() % ckeys.size()]
+		var hh := 9.0
+		match kind:
+			"nature/grass_large": hh = 10.0
+			"nature/grass": hh = 7.0
+			"nature/plant_bush": hh = 12.0
+			"nature/stone_smallA", "nature/stone_smallB": hh = 6.0
+			_: hh = 8.0
+		(cover[kind] as Array).append([Vector3(px3, _height_at_world(px3, pz3), pz3), hh * wr.randf_range(0.8, 1.3), wr.randf() * TAU])
+	for k3 in olives:
+		_scatter(k3, OLIVE_TINT, olives[k3], true)
+	_scatter("nature/tree_cone", PINE_TINT, pines, true)
+	for k4 in palms:
+		_scatter(k4, {}, palms[k4], true)
+	for k5 in cacti:
+		_scatter(k5, CACTUS_TINT, cacti[k5], true)
+	for k6 in cover:
+		_scatter(k6, ANEMONE_TINT if k6 == "nature/flower_redA" else {}, cover[k6], true, false)
+
+
+# Merge every static MeshInstance3D under `root` into one mesh per material (+ vertex format).
+# Cuts a building from ~30 draw calls to a handful — essential on phones.
+# Merge every static MeshInstance3D under `root` into very few meshes:
+# all plain-coloured parts → one vertex-coloured mesh, all limestone parts → one stone mesh,
+# textured model parts → one mesh per texture material. A building drops to ~3-4 draw calls.
+func _bake_static(root: Node3D) -> void:
+	var flat := {"v": PackedVector3Array(), "n": PackedVector3Array(), "c": PackedColorArray(), "i": PackedInt32Array()}
+	var stone := {"v": PackedVector3Array(), "n": PackedVector3Array(), "c": PackedColorArray(), "i": PackedInt32Array()}
+	var groups := {}
+	var order: Array = []
+	var done: Array = []
+	for c in root.find_children("*", "MeshInstance3D", true, false):
+		var mi: MeshInstance3D = c
+		if mi.mesh == null or mi.skin != null or _under_nobake(root, mi):
+			continue
+		var xf := _rel_xform(root, mi)
+		for i in range(mi.mesh.get_surface_count()):
+			var mat: Material = mi.get_surface_override_material(i)
+			if mat == null:
+				mat = mi.material_override
+			if mat == null:
+				mat = mi.mesh.surface_get_material(i)
+			var kind := _bake_kind(mat)
+			if kind == "flat" or kind == "stone":
+				_append_colored(flat if kind == "flat" else stone, mi.mesh.surface_get_arrays(i), xf, (mat as StandardMaterial3D).albedo_color if mat != null else Color.WHITE)
+				continue
+			var arrs: Array = mi.mesh.surface_get_arrays(i)
+			var sig := ""
+			for ai in [Mesh.ARRAY_NORMAL, Mesh.ARRAY_TANGENT, Mesh.ARRAY_COLOR, Mesh.ARRAY_TEX_UV, Mesh.ARRAY_TEX_UV2]:
+				sig += "1" if arrs[ai] != null else "0"
+			var key := "%d_%s" % [mat.get_instance_id() if mat != null else 0, sig]
+			if not groups.has(key):
+				groups[key] = {"mat": mat, "parts": []}
+				order.append(key)
+			(groups[key]["parts"] as Array).append([mi.mesh, i, xf])
+		done.append(mi)
+	for d in done:
+		if is_instance_valid(d):
+			(d as Node).get_parent().remove_child(d)
+			(d as Node).free()
+	_emit_colored(root, flat, _baked_mat(false))
+	_emit_colored(root, stone, _baked_mat(true))
+	for key in order:
+		var g: Dictionary = groups[key]
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for part in g["parts"]:
+			st.append_from(part[0], int(part[1]), part[2])
+		var am := st.commit()
+		if am == null or am.get_surface_count() == 0:
+			continue
+		if g["mat"] != null:
+			am.surface_set_material(0, g["mat"])
+		var out := MeshInstance3D.new()
+		out.mesh = am
+		root.add_child(out)
+
+
+func _bake_kind(mat: Material) -> String:
+	if mat == null:
+		return "flat"
+	if not (mat is StandardMaterial3D):
+		return "other"
+	var sm: StandardMaterial3D = mat
+	if sm.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED or sm.emission_enabled or sm.shading_mode != BaseMaterial3D.SHADING_MODE_PER_PIXEL:
+		return "other"
+	if sm.albedo_texture == null:
+		return "flat"
+	if sm.albedo_texture == stone_texture:
+		return "stone"
+	return "other"
+
+
+func _append_colored(acc: Dictionary, arrs: Array, xf: Transform3D, col: Color) -> void:
+	var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+	if verts.is_empty():
+		return
+	var norms: Variant = arrs[Mesh.ARRAY_NORMAL]
+	var nb := xf.basis.inverse().transposed()
+	var base := (acc["v"] as PackedVector3Array).size()
+	var v: PackedVector3Array = acc["v"]
+	var n: PackedVector3Array = acc["n"]
+	var cc: PackedColorArray = acc["c"]
+	for k in range(verts.size()):
+		v.append(xf * verts[k])
+		n.append((nb * (norms as PackedVector3Array)[k]).normalized() if norms != null else Vector3.UP)
+		cc.append(col)
+	acc["v"] = v
+	acc["n"] = n
+	acc["c"] = cc
+	var idx: Variant = arrs[Mesh.ARRAY_INDEX]
+	var ii: PackedInt32Array = acc["i"]
+	if idx != null:
+		for k2 in (idx as PackedInt32Array):
+			ii.append(base + k2)
+	else:
+		for k3 in range(verts.size()):
+			ii.append(base + k3)
+	acc["i"] = ii
+
+
+func _emit_colored(root: Node3D, acc: Dictionary, mat: Material) -> void:
+	if (acc["v"] as PackedVector3Array).is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = acc["v"]
+	arrays[Mesh.ARRAY_NORMAL] = acc["n"]
+	arrays[Mesh.ARRAY_COLOR] = acc["c"]
+	arrays[Mesh.ARRAY_INDEX] = acc["i"]
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	am.surface_set_material(0, mat)
+	var out := MeshInstance3D.new()
+	out.mesh = am
+	root.add_child(out)
+
+
+func _baked_mat(stone: bool) -> StandardMaterial3D:
+	var key := "baked_stone" if stone else "baked_flat"
+	if mat_cache.has(key):
+		return mat_cache[key]
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.vertex_color_is_srgb = true
+	m.roughness = 0.95
+	if stone:
+		m.albedo_texture = stone_texture
+		m.uv1_triplanar = true
+		m.uv1_scale = Vector3(0.022, 0.022, 0.022)
+	mat_cache[key] = m
+	return m
+
+
+func _under_nobake(root: Node, n: Node) -> bool:
+	var p := n.get_parent()
+	while p != null and p != root:
+		if p.has_meta("nobake"):
+			return true
+		p = p.get_parent()
+	return false
+
+
+func _rel_xform(root: Node3D, n: Node3D) -> Transform3D:
+	var xf := n.transform
+	var p := n.get_parent()
+	while p != null and p != root:
+		if p is Node3D:
+			xf = (p as Node3D).transform * xf
+		p = p.get_parent()
+	return xf
+
+
+# ---------------------------------------------------------------- atmosphere: sound, smoke, rain, night windows
+
+const WINDOW_COLOR := Color("#34444f")
+const SMOKE_SPOTS := {
+	"Kitchen": Vector3(-16, 40, -16), "Workshop": Vector3(15, 46, -9), "Olive Press": Vector3(10, 30, 6),
+	"Small House": Vector3(13, 8, 19), "Shack": Vector3(16, 24, -12),
+}
+var sfx_on := true
+var sfx_players: Array = []
+var sfx_streams := {}
+var rain_node: CPUParticles3D
+var rain_time := 0.0
+
+
+func _build_fx() -> void:
+	for i in range(6):
+		var ap := AudioStreamPlayer.new()
+		add_child(ap)
+		sfx_players.append(ap)
+	rain_node = CPUParticles3D.new()
+	rain_node.emitting = false
+	rain_node.amount = 500
+	rain_node.lifetime = 1.1
+	rain_node.local_coords = false
+	rain_node.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	rain_node.emission_box_extents = Vector3(1100, 10, 1100)
+	rain_node.direction = Vector3(0.12, -1, 0.05)
+	rain_node.spread = 2.0
+	rain_node.gravity = Vector3(0, -400, 0)
+	rain_node.initial_velocity_min = 520.0
+	rain_node.initial_velocity_max = 620.0
+	var drop := BoxMesh.new()
+	drop.size = Vector3(2.6, 26.0, 2.6)
+	rain_node.mesh = drop
+	var rm := StandardMaterial3D.new()
+	rm.albedo_color = Color(0.78, 0.84, 0.95, 0.6)
+	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rain_node.material_override = rm
+	rain_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(rain_node)
+
+
+func _sfx(sound: String, vol_db: float = -6.0) -> void:
+	if not sfx_on or sfx_players.is_empty():
+		return
+	if not sfx_streams.has(sound):
+		var path := "res://assets/sfx/%s.ogg" % sound
+		sfx_streams[sound] = load(path) if ResourceLoader.exists(path) else null
+	var st: AudioStream = sfx_streams[sound]
+	if st == null:
+		return
+	for ap in sfx_players:
+		var p: AudioStreamPlayer = ap
+		if not p.playing:
+			p.stream = st
+			p.volume_db = vol_db
+			p.play()
+			return
+
+
+func _toggle_sfx() -> void:
+	sfx_on = not sfx_on
+	sfx_btn.text = "الأصوات: %s" % ("تعمل" if sfx_on else "مطفأة")
+	_save_settings()
+
+
+func _window_mat() -> StandardMaterial3D:
+	if mat_cache.has("window_glow"):
+		return mat_cache["window_glow"]
+	var m := StandardMaterial3D.new()
+	m.albedo_color = WINDOW_COLOR
+	m.emission_enabled = true
+	m.emission = Color("#ffb54d")
+	m.emission_energy_multiplier = 0.0
+	mat_cache["window_glow"] = m
+	return m
+
+
+func _smoke_puffs(parent: Node3D, pos: Vector3, amount: int, color: Color, size: float, life: float, burst: bool) -> CPUParticles3D:
+	var p := CPUParticles3D.new()
+	p.amount = amount
+	p.lifetime = life
+	p.one_shot = burst
+	p.explosiveness = 0.85 if burst else 0.0
+	p.local_coords = false
+	p.position = pos
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 2.0 if not burst else 30.0
+	p.direction = Vector3(0, 1, 0)
+	p.spread = 18.0 if not burst else 70.0
+	p.gravity = Vector3(4, 3, 0) if not burst else Vector3(0, -10, 0)
+	p.initial_velocity_min = 8.0 if not burst else 25.0
+	p.initial_velocity_max = 14.0 if not burst else 45.0
+	p.scale_amount_min = 0.7
+	p.scale_amount_max = 1.3
+	var curve := Curve.new()
+	curve.add_point(Vector2(0, 0.3))
+	curve.add_point(Vector2(0.7, 1.4))
+	curve.add_point(Vector2(1, 0.0))
+	p.scale_amount_curve = curve
+	var q := SphereMesh.new()
+	q.radius = size * 0.5
+	q.height = size
+	q.radial_segments = 8
+	q.rings = 4
+	p.mesh = q
+	var m := StandardMaterial3D.new()
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = Color(color, 0.32)
+	p.material_override = m
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(p)
+	p.emitting = true
+	return p
+
+
+func _add_building_fx(b: Building) -> void:
+	if not b.done or not SMOKE_SPOTS.has(b.type) or b.node.get_node_or_null("Smoke") != null:
+		return
+	var s := _smoke_puffs(b.node, SMOKE_SPOTS[b.type] * b.base_scale, 8, Color("#d8d4cc"), 9.0, 4.0, false)
+	s.name = "Smoke"
+
+
+func _dust_burst(pos: Vector3) -> void:
+	var p := _smoke_puffs(self, pos + Vector3(0, 6, 0), 26, Color("#c8b48c"), 16.0, 1.4, true)
+	get_tree().create_timer(2.5).timeout.connect(p.queue_free)
+
+
+func _start_rain(seconds: float) -> void:
+	rain_time = seconds
+	if is_instance_valid(rain_node):
+		rain_node.emitting = true
+
+
+func _update_fx(delta: float, t_day: float) -> void:
+	if rain_time > 0.0:
+		rain_time -= delta
+		rain_node.position = camera_target + Vector3(0, 650, 0)
+		if rain_time <= 0.0:
+			rain_node.emitting = false
+	var night := 1.0 - smoothstep(0.0, 0.35, sin(t_day * PI))
+	_window_mat().emission_energy_multiplier = night * 2.2
